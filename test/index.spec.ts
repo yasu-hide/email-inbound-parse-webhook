@@ -1,41 +1,140 @@
-import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect } from 'vitest';
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src';
 
-describe('Hello World user worker', () => {
-	describe('request for /message', () => {
-		it('/ responds with "Hello, World!" (unit style)', async () => {
-			const request = new Request<unknown, IncomingRequestCfProperties>('http://example.com/message');
-			// Create an empty context to pass to `worker.fetch()`.
-			const ctx = createExecutionContext();
-			const response = await worker.fetch(request, env, ctx);
-			// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
-			await waitOnExecutionContext(ctx);
-			expect(await response.text()).toMatchInlineSnapshot(`"Hello, World!"`);
-		});
+type TestMessage = {
+	from: string;
+	to: string;
+	raw: ReadableStream;
+	rawSize: number;
+	setReject: ReturnType<typeof vi.fn>;
+};
 
-		it('responds with "Hello, World!" (integration style)', async () => {
-			const request = new Request('http://example.com/message');
-			const response = await SELF.fetch(request);
-			expect(await response.text()).toMatchInlineSnapshot(`"Hello, World!"`);
-		});
+function buildRawEmail(
+	subjectHeader: string,
+	fromHeader = 'Sender <sender@example.com>',
+	toHeader = 'Receiver <receiver@example.com>',
+	ccHeader?: string,
+): string {
+	const headers = [
+		`From: ${fromHeader}`,
+		`To: ${toHeader}`,
+		`Subject: ${subjectHeader}`,
+		`Content-Type: text/plain; charset=utf-8`,
+		`Content-Transfer-Encoding: 7bit`,
+	];
+	if (ccHeader) headers.splice(2, 0, `Cc: ${ccHeader}`);
+	return [...headers, ``, `hello`].join('\r\n');
+}
+
+function createMessage(rawEmail: string): TestMessage {
+	const body = new Response(rawEmail).body;
+	if (!body) throw new Error('Failed to create test stream');
+
+	return {
+		from: 'sender@example.com',
+		to: 'receiver@example.com',
+		raw: body,
+		rawSize: rawEmail.length,
+		setReject: vi.fn(),
+	};
+}
+
+async function runEmailWithSubject(subjectHeader: string): Promise<FormData> {
+	return runEmailWithRaw(buildRawEmail(subjectHeader));
+}
+
+async function runEmailWithRaw(raw: string): Promise<FormData> {
+	const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+	vi.stubGlobal('fetch', fetchMock);
+
+	const msg = createMessage(raw);
+	const ctx = createExecutionContext();
+
+	await worker.email(msg as any, { WEBHOOK_URL: 'https://example.test/webhook' } as any, ctx);
+	await waitOnExecutionContext(ctx);
+
+	expect(msg.setReject).not.toHaveBeenCalled();
+	expect(fetchMock).toHaveBeenCalledTimes(1);
+
+	const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+	expect(init.body).toBeInstanceOf(FormData);
+	return init.body as FormData;
+}
+
+describe('email worker subject decoding', () => {
+	beforeEach(() => {
+		vi.restoreAllMocks();
 	});
 
-	describe('request for /random', () => {
-		it('/ responds with a random UUID (unit style)', async () => {
-			const request = new Request<unknown, IncomingRequestCfProperties>('http://example.com/random');
-			// Create an empty context to pass to `worker.fetch()`.
-			const ctx = createExecutionContext();
-			const response = await worker.fetch(request, env, ctx);
-			// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
-			await waitOnExecutionContext(ctx);
-			expect(await response.text()).toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);
-		});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
 
-		it('responds with a random UUID (integration style)', async () => {
-			const request = new Request('http://example.com/random');
-			const response = await SELF.fetch(request);
-			expect(await response.text()).toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);
-		});
+	it('decodes RFC2047 base64 UTF-8 subject', async () => {
+		const form = await runEmailWithSubject('=?UTF-8?B?5ZWT5piO6aSo?=');
+		expect(form.get('subject')).toBe('啓明館');
+	});
+
+	it('decodes RFC2047 Q-encoding UTF-8 subject', async () => {
+		const form = await runEmailWithSubject('=?UTF-8?Q?=E5=95=93=E6=98=8E=E9=A4=A8?=');
+		expect(form.get('subject')).toBe('啓明館');
+	});
+
+	it('decodes folded RFC2047 subject headers', async () => {
+		const form = await runEmailWithRaw([
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: =?UTF-8?B?5ZWT?=',
+			' =?UTF-8?B?5piO6aSo?=',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Transfer-Encoding: 7bit',
+			'',
+			'hello',
+		].join('\r\n'));
+		expect(form.get('subject')).toBe('啓明館');
+	});
+
+	it('decodes RFC2047 base64 display-name in From and To', async () => {
+		const raw = buildRawEmail(
+			'=?UTF-8?B?5ZWT5piO6aSo?=',
+			'=?UTF-8?B?5ZWT5piO6aSo?= <sender@example.com>',
+			'=?UTF-8?B?5Y+X5L+h6ICF?= <receiver@example.com>',
+		);
+		const form = await runEmailWithRaw(raw);
+		expect(form.get('from')).toBe('啓明館 <sender@example.com>');
+		expect(form.get('to')).toBe('受信者 <receiver@example.com>');
+	});
+
+	it('decodes folded RFC2047 display-name in To header', async () => {
+		const raw = buildRawEmail(
+			'=?UTF-8?B?5ZWT5piO6aSo?=',
+			'Sender <sender@example.com>',
+			'=?UTF-8?B?5Y+X?=\r\n =?UTF-8?B?5L+h6ICF?= <receiver@example.com>',
+		);
+		const form = await runEmailWithRaw(raw);
+		expect(form.get('to')).toBe('受信者 <receiver@example.com>');
+	});
+
+	it('decodes RFC2047 base64 display-name in Cc header', async () => {
+		const raw = buildRawEmail(
+			'=?UTF-8?B?5ZWT5piO6aSo?=',
+			'Sender <sender@example.com>',
+			'Receiver <receiver@example.com>',
+			'=?UTF-8?B?5Y+X5L+h6ICF?= <cc@example.com>',
+		);
+		const form = await runEmailWithRaw(raw);
+		expect(form.get('cc')).toBe('受信者 <cc@example.com>');
+	});
+
+	it('decodes folded RFC2047 display-name in Cc header', async () => {
+		const raw = buildRawEmail(
+			'=?UTF-8?B?5ZWT5piO6aSo?=',
+			'Sender <sender@example.com>',
+			'Receiver <receiver@example.com>',
+			'=?UTF-8?B?5Y+X?=\r\n =?UTF-8?B?5L+h6ICF?= <cc@example.com>',
+		);
+		const form = await runEmailWithRaw(raw);
+		expect(form.get('cc')).toBe('受信者 <cc@example.com>');
 	});
 });
