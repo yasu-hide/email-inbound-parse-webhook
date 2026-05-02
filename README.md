@@ -81,7 +81,7 @@ pnpm cf-typegen
 ローカルからデプロイを実行します。
 
 ```bash
-pnpm deploy
+pnpm run deploy:worker
 ```
 
 GitHub Actions からも同様にデプロイできます。CI/CD の構成、必須 Secrets、実行条件は `DEPLOY.md` を参照してください。
