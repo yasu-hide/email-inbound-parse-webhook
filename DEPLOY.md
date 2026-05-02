@@ -5,7 +5,7 @@
 ## ローカルデプロイ
 
 ```bash
-pnpm deploy
+pnpm run deploy:worker
 ```
 
 ## GitHub Actions デプロイ
@@ -13,7 +13,7 @@ pnpm deploy
 `main` ブランチへの push をトリガーに、以下の順序で実行します。
 
 1. `test` ジョブで `pnpm test` を実行
-2. `test` 成功時のみ `deploy` ジョブで `pnpm deploy` を実行
+2. `test` 成功時のみ `deploy` ジョブで `pnpm run deploy:worker` を実行
 
 これにより、テスト失敗時はデプロイされません。
 
@@ -31,6 +31,7 @@ GitHub リポジトリの Secrets に以下を設定してください。
 - これらは GitHub Actions の `deploy.yml` 用 Secret であり、Dependabot の update 実行には使われません
 - private registry を Dependabot から参照する場合は、GitHub の Dependabot secrets と registries 設定を別途追加してください
 - 本リポジトリは Dependabot の npm ecosystem 互換性を優先して pnpm 10 系を固定しています
+- pnpm 10 以降では `deploy` が組み込みコマンドと衝突するため、Worker デプロイは `pnpm run deploy:worker` を使います
 
 Cloudflare の最新ガイド:
 

@@ -4,7 +4,7 @@
 	"private": true,
 	"packageManager": "pnpm@10.19.0",
 	"scripts": {
-		"deploy": "wrangler deploy",
+		"deploy:worker": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest run",
