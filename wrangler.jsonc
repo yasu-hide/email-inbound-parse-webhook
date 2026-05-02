@@ -15,6 +15,11 @@
 		// The path to the directory containing the `index.html` file to be served at `/`
 		"directory": "./public"
 	},
+	"secrets": {
+		"required": [
+			"WEBHOOK_URL"
+		]
+	},
 	"observability": {
 		"enabled": true
 	}

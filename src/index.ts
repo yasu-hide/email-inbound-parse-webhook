@@ -5,18 +5,63 @@ type ParsedResult = {
 	headers: Record<string, string>;
 	rawHeaders?: Record<string, string>;
 	from?: string;
-    fromCharset?: string;
+	fromCharset?: string;
 	to?: string;
-    toCharset?: string;
-    cc?: string;
-    ccCharset?: string;
+	toCharset?: string;
+	cc?: string;
+	ccCharset?: string;
 	subject?: string;
-    subjectCharset?: string;
+	subjectCharset?: string;
 	text?: string;
-    textCharset?: string;
+	textCharset?: string;
 	html?: string;
-    htmlCharset?: string;
+	htmlCharset?: string;
 };
+
+type WorkerEnv = Env & {
+	WEBHOOK_URL?: string;
+	MAX_MESSAGE_SIZE?: number;
+};
+
+
+function concatUint8Arrays(left: Uint8Array<ArrayBufferLike>, right: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBufferLike> {
+	const merged = new Uint8Array(left.length + right.length);
+	merged.set(left, 0);
+	merged.set(right, left.length);
+	return merged;
+}
+
+function findHeaderSeparator(bytes: Uint8Array<ArrayBufferLike>): { index: number; length: number } | null {
+	for (let i = 0; i <= bytes.length - 4; i++) {
+		if (bytes[i] === 0x0d && bytes[i + 1] === 0x0a && bytes[i + 2] === 0x0d && bytes[i + 3] === 0x0a) {
+			return { index: i, length: 4 };
+		}
+	}
+
+	for (let i = 0; i <= bytes.length - 2; i++) {
+		if (bytes[i] === 0x0a && bytes[i + 1] === 0x0a) {
+			return { index: i, length: 2 };
+		}
+	}
+
+	return null;
+}
+
+function bytesToBinaryString(bytes: Uint8Array): string {
+	let text = '';
+	for (const byte of bytes) {
+		text += String.fromCharCode(byte);
+	}
+	return text;
+}
+
+function binaryStringToUint8Array(value: string): Uint8Array {
+	const bytes = new Uint8Array(value.length);
+	for (let i = 0; i < value.length; i++) {
+		bytes[i] = value.charCodeAt(i) & 0xff;
+	}
+	return bytes;
+}
 
 
 // helpers for charset-aware decoding: read charset from Content-Type header when present
@@ -71,7 +116,7 @@ function normalizeCharset(charset: string | undefined): string | undefined {
 	return cs;
 }
 
-function scoreDecodedHeaderText(text: string): number {
+function scoreDecodedText(text: string): number {
 	if (!text) return 0;
 	const replacement = (text.match(/\uFFFD/g) || []).length;
 	const controls = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g) || []).length;
@@ -80,7 +125,35 @@ function scoreDecodedHeaderText(text: string): number {
 	return replacement * 100 + controls * 20 + halfwidthPunc * 8 + halfwidthRun * 30;
 }
 
+function isAsciiOnly(bytes: Uint8Array): boolean {
+	for (const b of bytes) {
+		if (b > 0x7f) return false;
+	}
+	return true;
+}
+
+function hasIso2022JpEscape(bytes: Uint8Array): boolean {
+	for (let i = 0; i < bytes.length; i++) {
+		if (bytes[i] === 0x1b) return true;
+	}
+	return false;
+}
+
+function isValidUtf8(bytes: Uint8Array): boolean {
+	try {
+		new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
+		return true;
+	} catch (e) {
+		return false;
+	}
+}
+
 function decodeBytesWithFallback(bytes: Uint8Array, declaredCharset?: string): { text: string; charset?: string } {
+	const normalizedDeclared = normalizeCharset(declaredCharset);
+	if (isAsciiOnly(bytes)) {
+		return { text: decodeBytes(bytes, normalizedDeclared || 'utf-8'), charset: normalizedDeclared || 'utf-8' };
+	}
+
 	const candidates: string[] = [];
 	const addCandidate = (charset: string | undefined) => {
 		const cs = normalizeCharset(charset);
@@ -88,23 +161,43 @@ function decodeBytesWithFallback(bytes: Uint8Array, declaredCharset?: string): {
 		if (!candidates.includes(cs)) candidates.push(cs);
 	};
 
-	addCandidate(declaredCharset);
+	addCandidate(normalizedDeclared);
 	addCandidate('utf-8');
 	addCandidate('windows-31j');
-	addCandidate('shift_jis');
 	addCandidate('euc-jp');
 	addCandidate('iso-2022-jp');
 	addCandidate('iso-8859-1');
 
-	let bestText = decodeBytes(bytes, normalizeCharset(declaredCharset));
-	let bestScore = scoreDecodedHeaderText(bestText);
-	let bestCharset = normalizeCharset(declaredCharset);
+	const hasIsoEscape = hasIso2022JpEscape(bytes);
+	const utf8Valid = isValidUtf8(bytes);
+	const priority: Record<string, number> = {
+		'utf-8': 0,
+		'windows-31j': 1,
+		'euc-jp': 2,
+		'iso-2022-jp': 3,
+		'iso-8859-1': 4,
+	};
+
+	let bestText = decodeBytes(bytes, normalizedDeclared || 'utf-8');
+	let bestScore = scoreDecodedText(bestText);
+	let bestCharset = normalizedDeclared || 'utf-8';
+
+	if (!normalizedDeclared && utf8Valid) {
+		bestText = decodeBytes(bytes, 'utf-8');
+		bestScore = scoreDecodedText(bestText);
+		bestCharset = 'utf-8';
+	}
 
 	for (const cs of candidates) {
+		if (cs === 'iso-2022-jp' && !hasIsoEscape && normalizedDeclared !== 'iso-2022-jp') {
+			continue;
+		}
 		try {
 			const decoded = new TextDecoder(cs).decode(bytes);
-			const score = scoreDecodedHeaderText(decoded);
-			if (score < bestScore) {
+			const score = scoreDecodedText(decoded);
+			const currentPriority = priority[cs] ?? 99;
+			const bestPriority = priority[bestCharset] ?? 99;
+			if (score < bestScore || (score === bestScore && currentPriority < bestPriority)) {
 				bestText = decoded;
 				bestScore = score;
 				bestCharset = cs;
@@ -119,71 +212,49 @@ function decodeBytesWithFallback(bytes: Uint8Array, declaredCharset?: string): {
 
 // Try to guess charset by attempting decodes and checking for replacement chars
 function guessCharset(bytes: Uint8Array): string | undefined {
-	const candidates = ['utf-8', 'shift_jis', 'windows-31j', 'euc-jp', 'iso-2022-jp', 'iso-8859-1'];
-	for (const cs of candidates) {
-		try {
-			const decoded = new TextDecoder(cs).decode(bytes);
-			if (!decoded.includes('\uFFFD')) return cs;
-		} catch (e) {
-			// TextDecoder may not support this encoding in the environment; ignore
-			continue;
-		}
-	}
-	return undefined;
+	return decodeBytesWithFallback(bytes).charset;
 }
 
-// Guess charset for header values; prefers raw header text (which may include encoded-words)
-function guessHeaderCharset(values: Array<string | undefined>): string | undefined {
-	for (const v of values) {
-		if (!v) continue;
-		// Try to find RFC2047 encoded-words and guess from their payload bytes
-		const re = /=\?([^?]+)\?([bqBQ])\?([^?]+)\?=/g;
-		let m: RegExpExecArray | null;
-		let found = false;
-		while ((m = re.exec(v)) !== null) {
-			found = true;
-			const declared = normalizeCharset(m[1] || '');
-			if (declared) return declared;
-			const enc = (m[2] || '').toLowerCase();
-			const txt = m[3] || '';
-			try {
-				const bytes = enc === 'b' ? base64ToUint8Array(txt) : quotedPrintableToUint8Array(txt.replace(/_/g, ' '));
-				const g = guessCharset(bytes);
-				if (g) return g;
-			} catch (e) { /* ignore */ }
-		}
-		// If no encoded-word found, try guessing from UTF-8 encoded header string
-		if (!found) {
-			try {
-				const encBytes = new TextEncoder().encode(v);
-				const g = guessCharset(encBytes);
-				if (g) return g;
-			} catch (e) { /* ignore */ }
-		}
-	}
-	return undefined;
+function decodeHeaderTextSegment(segment: string): string {
+	if (!segment) return '';
+	const bytes = binaryStringToUint8Array(segment);
+	if (isAsciiOnly(bytes)) return segment;
+	return decodeBytesWithFallback(bytes).text;
 }
 
-function decodeHeaderValue(val: string): string {
-	if (!val) return val;
-	// RFC2047: whitespace between adjacent encoded-words should be ignored
-	const normalized = val.replace(/(\?=)\s+(=\?)/g, '$1$2');
-	// decode RFC2047 encoded-words: =?charset?B?...?= or =?charset?Q?...?=
-	return normalized.replace(/=\?([^?]+)\?([bqBQ])\?([^?]+)\?=/g, (_m, cs, enc, txt) => {
-		const csNorm = normalizeCharset(cs || 'utf-8');
-		if ((enc || '').toLowerCase() === 'b') {
+function decodeHeaderValue(rawValue: string): string {
+	if (!rawValue) return rawValue;
+	const normalized = rawValue.replace(/(\?=)\s+(=\?)/g, '$1$2');
+	const encodedWordPattern = /=\?([^?]+)\?([bqBQ])\?([^?]+)\?=/g;
+	let result = '';
+	let lastIndex = 0;
+	let match: RegExpExecArray | null;
+
+	while ((match = encodedWordPattern.exec(normalized)) !== null) {
+		result += decodeHeaderTextSegment(normalized.slice(lastIndex, match.index));
+
+		const [, charset, encoding, encodedText] = match;
+		const normalizedCharset = normalizeCharset(charset || 'utf-8');
+		if ((encoding || '').toLowerCase() === 'b') {
 			try {
-				const bytes = base64ToUint8Array(txt);
-				return decodeBytesWithFallback(bytes, csNorm).text;
-			} catch (e) { return txt; }
+				result += decodeBytesWithFallback(base64ToUint8Array(encodedText), normalizedCharset).text;
+			} catch (e) {
+				result += encodedText;
+			}
 		} else {
-			const qp = txt.replace(/_/g, ' ');
+			const qp = encodedText.replace(/_/g, ' ');
 			try {
-				const bytes = quotedPrintableToUint8Array(qp);
-				return decodeBytesWithFallback(bytes, csNorm).text;
-			} catch (e) { return qp; }
+				result += decodeBytesWithFallback(quotedPrintableToUint8Array(qp), normalizedCharset).text;
+			} catch (e) {
+				result += qp;
+			}
 		}
-	});
+
+		lastIndex = encodedWordPattern.lastIndex;
+	}
+
+	result += decodeHeaderTextSegment(normalized.slice(lastIndex));
+	return result;
 }
 
 // safe wrapper for message.setReject to avoid repeating try/catch
@@ -199,22 +270,23 @@ async function parseEmailStream(stream: ReadableStream): Promise<ParsedResult> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder('utf-8');
 	let buffer = '';
+	let headerBuffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+	let headerSeparator = findHeaderSeparator(headerBuffer);
 
-	const indexOfSeq = (seq: string) => buffer.indexOf(seq);
-
-	// Read headers
-	while (indexOfSeq('\r\n\r\n') === -1 && indexOfSeq('\n\n') === -1) {
+	while (!headerSeparator) {
 		const { done, value } = await reader.read();
 		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		if (buffer.length > 1024 * 1024) break; // protect
+		headerBuffer = concatUint8Arrays(headerBuffer, new Uint8Array(value));
+		headerSeparator = findHeaderSeparator(headerBuffer);
+		if (headerBuffer.length > 1024 * 1024) break;
 	}
 
-	let sep = '\r\n\r\n';
-	let idx = buffer.indexOf(sep);
-	if (idx === -1) { sep = '\n\n'; idx = buffer.indexOf(sep); }
-	const rawHeaders = idx !== -1 ? buffer.slice(0, idx) : buffer;
-	buffer = idx !== -1 ? buffer.slice(idx + sep.length) : '';
+	const rawHeaderBytes = headerSeparator ? headerBuffer.slice(0, headerSeparator.index) : headerBuffer;
+	const initialBodyBytes = headerSeparator
+		? headerBuffer.slice(headerSeparator.index + headerSeparator.length)
+		: new Uint8Array(0);
+	const rawHeaders = bytesToBinaryString(rawHeaderBytes);
+	buffer = decoder.decode(initialBodyBytes, { stream: true });
 
 	const unfoldedRawHeaders = rawHeaders.replace(/\r?\n[\t ]+/g, ' ');
 	const headers: Record<string, string> = {};
@@ -237,20 +309,20 @@ async function parseEmailStream(stream: ReadableStream): Promise<ParsedResult> {
 
 	const result: ParsedResult = { headers: decodedHeaders, rawHeaders: headers };
 	if (decodedHeaders['from']) {
-        result.from = decodedHeaders['from'];
-        result.fromCharset = guessHeaderCharset([headers?.['from'], decodedHeaders['from']]);
-    }
+		result.from = decodedHeaders['from'];
+		result.fromCharset = 'utf-8';
+	}
 	if (decodedHeaders['to']) {
-        result.to = decodedHeaders['to'];
-        result.toCharset = guessHeaderCharset([headers?.['to'], decodedHeaders['to']]);
-    }
-    if (decodedHeaders['cc']) {
-        result.cc = decodedHeaders['cc'];
-        result.ccCharset = guessHeaderCharset([headers?.['cc'], decodedHeaders['cc']]);
-    }
+		result.to = decodedHeaders['to'];
+		result.toCharset = 'utf-8';
+	}
+	if (decodedHeaders['cc']) {
+		result.cc = decodedHeaders['cc'];
+		result.ccCharset = 'utf-8';
+	}
 	if (decodedHeaders['subject']) {
-        result.subject = decodedHeaders['subject'];
-        result.subjectCharset = guessHeaderCharset([headers?.['subject'], decodedHeaders['subject']]);
+		result.subject = decodedHeaders['subject'];
+		result.subjectCharset = 'utf-8';
     }
 
 	if (boundary) {
@@ -328,14 +400,14 @@ async function parseEmailStream(stream: ReadableStream): Promise<ParsedResult> {
 				} else {
 					contentBytes = new TextEncoder().encode(raw);
 				}
-				const usedCharset = headerCharset ?? guessCharset(contentBytes);
-				const content = decodeBytes(contentBytes, usedCharset);
+				const decodedContent = decodeBytesWithFallback(contentBytes, headerCharset);
+				const content = decodedContent.text;
 				if (isText) {
-                    result.textCharset = usedCharset;
+					result.textCharset = decodedContent.charset;
                     result.text = (result.text ? result.text + '\n' : '') + content;
                 }
 				if (isHtml) {
-                    result.htmlCharset = usedCharset;
+					result.htmlCharset = decodedContent.charset;
                     result.html = (result.html ? result.html + '\n' : '') + content;
                 }
 			}
@@ -360,13 +432,13 @@ async function parseEmailStream(stream: ReadableStream): Promise<ParsedResult> {
 		} else {
 			bodyBytes = new TextEncoder().encode(buffer);
 		}
-		const usedBodyCharset = headerCharset ?? guessCharset(bodyBytes);
-		const body = decodeBytes(bodyBytes, usedBodyCharset);
+		const decodedBody = decodeBytesWithFallback(bodyBytes, headerCharset);
+		const body = decodedBody.text;
 		if (/text\/html/i.test(contentType)) {
-            result.htmlCharset = usedBodyCharset;
+			result.htmlCharset = decodedBody.charset;
             result.html = body;
         } else {
-            result.textCharset = usedBodyCharset;
+			result.textCharset = decodedBody.charset;
             result.text = body;
         } 
 	}
@@ -375,7 +447,7 @@ async function parseEmailStream(stream: ReadableStream): Promise<ParsedResult> {
 }
 
 export default {
-	async email(message, env, ctx) {
+	async email(message, env: WorkerEnv, ctx) {
 		console.info('email.received', { from: message.from, to: message.to, rawSize: (message as any).rawSize });
 
 		if (!env.WEBHOOK_URL) {
@@ -404,46 +476,48 @@ export default {
 		}
 
 		const form = new FormData();
-   
+
 		// Build charsets based on parsed presence; fall back to parsed.* or message.* when raw header missing
 		const headerCharsets: Record<string, string> = {};
 		// From
 		form.append('from', parsed.from ?? message.from ?? '');
-		headerCharsets['from'] = parsed.fromCharset || '';
+		headerCharsets['from'] = parsed.from ?? message.from ? 'utf-8' : '';
 
-        // To
+		// To
 		form.append('to', parsed.to ?? message.to ?? '');
-		headerCharsets['to'] = parsed.toCharset || '';
+		headerCharsets['to'] = parsed.to ?? message.to ? 'utf-8' : '';
 
 		// Subject
 		form.append('subject', parsed.subject ?? '');
-		headerCharsets['subject'] = parsed.subjectCharset || '';
+		headerCharsets['subject'] = parsed.subject ? 'utf-8' : '';
 
-        // Cc
+		// Cc
 		if (parsed.cc) {
 			form.append('cc', parsed.cc);
-			headerCharsets['cc'] = parsed.ccCharset || '';
+			headerCharsets['cc'] = 'utf-8';
 		}
 
-        // Text
+		// Text
 		if (parsed.text) {
-            form.append('text', parsed.text);
-            headerCharsets['text'] = parsed.textCharset || '';
-        }
+			form.append('text', parsed.text);
+			headerCharsets['text'] = parsed.textCharset || '';
+		}
 
-        // HTML
+		// HTML
 		if (parsed.html) {
-            form.append('html', parsed.html);
-            headerCharsets['html'] = parsed.htmlCharset || '';
-        }
+			form.append('html', parsed.html);
+			headerCharsets['html'] = parsed.htmlCharset || '';
+		}
 
-        form.append('charsets', JSON.stringify(headerCharsets));
+		form.append('charsets', JSON.stringify(headerCharsets));
 
 		console.info('email.parsed', {
-            from: parsed.from ?? message.from,
-            to: parsed.to ?? message.to,
-            subject: parsed.subject,
-        });
+			from: parsed.from ?? message.from,
+			to: parsed.to ?? message.to,
+			subject: parsed.subject,
+			charsets: headerCharsets
+		});
+
 		try {
 			const res = await fetch(env.WEBHOOK_URL, { method: 'POST', body: form });
 			if (res.ok) {
@@ -455,4 +529,4 @@ export default {
 			console.error('webhook.post_error', { error: String(e) });
 		}
 	},
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<WorkerEnv>;

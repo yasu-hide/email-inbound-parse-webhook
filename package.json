@@ -6,7 +6,8 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
-		"test": "vitest",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
@@ -14,7 +15,6 @@
 		"@types/node": "^25.3.2",
 		"typescript": "^5.5.2",
 		"vitest": "~3.2.0",
-		"wrangler": "^4.69.0"
-	},
-	"dependencies": {}
+		"wrangler": "^4.85.0"
+	}
 }
