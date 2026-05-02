@@ -2,5 +2,5 @@
 minimum_release_age = "7d"
 
 [tools]
-pnpm = "latest"
+pnpm = "10"
 wrangler = "latest"

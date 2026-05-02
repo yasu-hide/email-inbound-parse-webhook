@@ -26,6 +26,12 @@ GitHub リポジトリの Secrets に以下を設定してください。
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 
+補足:
+
+- これらは GitHub Actions の `deploy.yml` 用 Secret であり、Dependabot の update 実行には使われません
+- private registry を Dependabot から参照する場合は、GitHub の Dependabot secrets と registries 設定を別途追加してください
+- 本リポジトリは Dependabot の npm ecosystem 互換性を優先して pnpm 10 系を固定しています
+
 Cloudflare の最新ガイド:
 
 - https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/
