@@ -13,9 +13,11 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 
 | Command | Purpose |
 |---------|---------|
-| `npx wrangler dev` | Local development |
-| `npx wrangler deploy` | Deploy to Cloudflare |
-| `npx wrangler types` | Generate TypeScript types |
+| `wrangler dev` | Local development |
+| `wrangler deploy` | Deploy to Cloudflare |
+| `wrangler types` | Generate TypeScript types |
+
+If shim resolution is unstable, prefer running commands via `mise exec -- <command>`.
 
 Run `wrangler types` after changing bindings in wrangler.jsonc.
 
