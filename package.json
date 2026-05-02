@@ -2,6 +2,7 @@
 	"name": "email-inbound-parse-webhook",
 	"version": "0.0.0",
 	"private": true,
+	"packageManager": "pnpm@11.0.3",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
