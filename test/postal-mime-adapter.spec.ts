@@ -112,4 +112,96 @@ describe('postal-mime adapter', () => {
 		expect(parsed.textCharset).toBe('windows-31j');
 		expect(parsed.htmlCharset).toBe('utf-8');
 	});
+
+	it('prefers postal output for simple multipart/mixed', async () => {
+		const boundary = '----healthy-mixed';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: healthy mixed',
+			`Content-Type: multipart/mixed; boundary="${boundary}"; charset=ISO-2022-JP`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=Shift_JIS',
+			'',
+			'plain mixed body',
+			`--${boundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html mixed body</p>',
+			`--${boundary}`,
+			'Content-Type: application/octet-stream',
+			'Content-Disposition: attachment; filename="dummy.bin"',
+			'',
+			'ignored-binary-content',
+			`--${boundary}--`,
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toContain('plain mixed body');
+		expect(parsed.html).toContain('<p>html mixed body</p>');
+		expect(parsed.textCharset).toBe('iso-2022-jp');
+		expect(parsed.htmlCharset).toBe('iso-2022-jp');
+	});
+
+	it('keeps compatibility fallback for malformed multipart/mixed', async () => {
+		const boundary = '----broken-mixed';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: broken mixed',
+			`Content-Type: multipart/mixed; boundary="${boundary}"; charset=ISO-2022-JP`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=Shift_JIS',
+			'',
+			'plain broken mixed body',
+			`--${boundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html broken mixed body</p>',
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toContain('plain broken mixed body');
+		expect(parsed.html).toContain('<p>html broken mixed body</p>');
+		expect(parsed.textCharset).toBe('windows-31j');
+		expect(parsed.htmlCharset).toBe('utf-8');
+	});
+
+	it('keeps text and html extraction for nested multipart mixed + alternative', async () => {
+		const outerBoundary = '----outer-mixed';
+		const innerBoundary = '----inner-alt';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: nested mixed alt',
+			`Content-Type: multipart/mixed; boundary="${outerBoundary}"; charset=utf-8`,
+			'',
+			`--${outerBoundary}`,
+			`Content-Type: multipart/alternative; boundary="${innerBoundary}"`,
+			'',
+			`--${innerBoundary}`,
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'plain nested body',
+			`--${innerBoundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html nested body</p>',
+			`--${innerBoundary}--`,
+			`--${outerBoundary}`,
+			'Content-Type: application/octet-stream',
+			'Content-Disposition: attachment; filename="dummy.bin"',
+			'',
+			'ignored-binary-content',
+			`--${outerBoundary}--`,
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toContain('plain nested body');
+		expect(parsed.html).toContain('<p>html nested body</p>');
+		expect(parsed.textCharset).toBe('utf-8');
+		expect(parsed.htmlCharset).toBe('utf-8');
+	});
 });

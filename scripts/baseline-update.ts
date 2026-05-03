@@ -2,9 +2,9 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseEmailStream, type ParsedResult } from '../src/email-parser';
 import { buildWebhookPayload, type WebhookPayload } from '../src/webhook-payload-builder';
-import { g3Corpus, type RawEmailInput } from '../test/g3/corpus';
+import { baselineCases, type RawEmailInput } from '../test/baseline/cases';
 
-type GoldenCase =
+type BaselineExpectedCase =
 	| { id: string; status: 'ok'; parsed: ParsedResult; payload: WebhookPayload }
 	| { id: string; status: 'error'; error: string };
 
@@ -19,10 +19,10 @@ function toStream(raw: RawEmailInput): ReadableStream {
 	return stream;
 }
 
-async function buildGoldenCases(): Promise<GoldenCase[]> {
-	const out: GoldenCase[] = [];
+async function buildExpectedCases(): Promise<BaselineExpectedCase[]> {
+	const out: BaselineExpectedCase[] = [];
 
-	for (const testCase of g3Corpus) {
+	for (const testCase of baselineCases) {
 		try {
 			const parsed = await parseEmailStream(toStream(testCase.raw));
 			const envelope = {
@@ -49,14 +49,14 @@ async function buildGoldenCases(): Promise<GoldenCase[]> {
 }
 
 async function main() {
-	const outputPath = path.join(process.cwd(), 'test', 'g3', 'golden.json');
-	const goldenCases = await buildGoldenCases();
-	await writeFile(outputPath, `${JSON.stringify(goldenCases, null, 2)}\n`, 'utf-8');
-	console.log(`[g3] updated golden cases: ${goldenCases.length}`);
-	console.log(`[g3] output: ${outputPath}`);
+	const outputPath = path.join(process.cwd(), 'test', 'baseline', 'expected-results.json');
+	const expectedCases = await buildExpectedCases();
+	await writeFile(outputPath, `${JSON.stringify(expectedCases, null, 2)}\n`, 'utf-8');
+	console.log(`[baseline] updated expected results: ${expectedCases.length}`);
+	console.log(`[baseline] output: ${outputPath}`);
 }
 
 main().catch((error) => {
-	console.error('[g3] golden update failed', error);
+	console.error('[baseline] expected results update failed', error);
 	process.exitCode = 1;
 });

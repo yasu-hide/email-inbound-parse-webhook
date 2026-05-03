@@ -1,8 +1,9 @@
 import { parseEmailStream, type ParsedResult } from '../../src/email-parser';
+import { inspectMultipartFallbackForRawInput, type MultipartFallbackReason } from '../../src/email-parser/postal-mime-adapter';
 import { buildWebhookPayload } from '../../src/webhook-payload-builder';
-import { compareParsedAndPayload, type DiffItem } from './compare-helpers';
-import { g3Corpus, type RawEmailInput } from './corpus';
-import goldenCases from './golden.json';
+import { compareParsedAndPayload, type DiffItem } from './comparison-helpers';
+import { baselineCases, type RawEmailInput } from './cases';
+import expectedResults from './expected-results.json';
 
 export type ParseResult =
 	| { ok: true; parsed: ParsedResult }
@@ -19,9 +20,14 @@ export type CaseReport = {
 		expected?: string;
 		current?: string;
 	};
+	multipartFallback?: {
+		contentType?: string;
+		shouldFallback: boolean;
+		reason?: MultipartFallbackReason;
+	};
 };
 
-export type G3CompareReport = {
+export type BaselineCompareReport = {
 	generatedAt: string;
 	total: number;
 	normalCount: number;
@@ -49,13 +55,13 @@ function toStream(raw: RawEmailInput): ReadableStream {
 	return stream;
 }
 
-type GoldenCase =
+type BaselineExpectedCase =
 	| { id: string; status: 'ok'; parsed: ParsedResult; payload: ReturnType<typeof buildWebhookPayload> }
 	| { id: string; status: 'error'; error: string };
 
-const goldenCaseList = goldenCases as GoldenCase[];
-const goldenCaseMap = new Map<string, GoldenCase>(
-	goldenCaseList.map((entry) => [entry.id, entry]),
+const expectedCaseList = expectedResults as BaselineExpectedCase[];
+const expectedCaseMap = new Map<string, BaselineExpectedCase>(
+	expectedCaseList.map((entry) => [entry.id, entry]),
 );
 
 async function parseCurrent(raw: RawEmailInput): Promise<ParseResult> {
@@ -67,12 +73,21 @@ async function parseCurrent(raw: RawEmailInput): Promise<ParseResult> {
 	}
 }
 
-export async function runG3Comparison(): Promise<G3CompareReport> {
+export async function runBaselineComparison(): Promise<BaselineCompareReport> {
 	const reports: CaseReport[] = [];
-	const corpusIdSet = new Set(g3Corpus.map((entry) => entry.id));
+	const caseIdSet = new Set(baselineCases.map((entry) => entry.id));
 
-	for (const testCase of g3Corpus) {
-		const expected = goldenCaseMap.get(testCase.id);
+	for (const testCase of baselineCases) {
+		const fallbackInspection = await inspectMultipartFallbackForRawInput(testCase.raw);
+		const multipartFallback = fallbackInspection.isMultipart
+			? {
+				contentType: fallbackInspection.contentType,
+				shouldFallback: fallbackInspection.shouldFallback,
+				reason: fallbackInspection.reason,
+			}
+			: undefined;
+
+		const expected = expectedCaseMap.get(testCase.id);
 		if (!expected) {
 			reports.push({
 				id: testCase.id,
@@ -81,14 +96,15 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 				status: 'error',
 				criticalDiffCount: 1,
 				diffs: [{
-					field: 'golden',
+					field: 'expected_results',
 					category: 'payload_missing',
 					critical: true,
 					legacyValue: 'present',
 					currentValue: 'missing',
-					note: 'golden_case_missing',
+					note: 'expected_case_missing',
 				}],
-				error: { expected: 'golden case missing', current: undefined },
+				error: { expected: 'expected results case missing', current: undefined },
+				multipartFallback,
 			});
 			continue;
 		}
@@ -116,6 +132,7 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 					expected: expected.status === 'error' ? expected.error : undefined,
 					current: current.ok ? undefined : current.error,
 				},
+				multipartFallback,
 			});
 			continue;
 		}
@@ -138,17 +155,18 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 			status: criticalDiffCount > 0 ? 'critical_diff' : 'match',
 			criticalDiffCount,
 			diffs,
+				multipartFallback,
 		});
 	}
 
-	for (const expected of goldenCaseList) {
-		if (corpusIdSet.has(expected.id)) {
+	for (const expected of expectedCaseList) {
+		if (caseIdSet.has(expected.id)) {
 			continue;
 		}
 		reports.push({
 			id: expected.id,
 			group: 'error',
-			description: 'golden case exists but corpus entry is missing',
+			description: 'expected results case exists but baseline case entry is missing',
 			status: 'error',
 			criticalDiffCount: 1,
 			diffs: [{
@@ -159,7 +177,8 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 				currentValue: 'present',
 				note: 'corpus_case_missing',
 			}],
-			error: { expected: 'golden case has no corpus case', current: undefined },
+				error: { expected: 'expected results case has no baseline case entry', current: undefined },
+				multipartFallback: undefined,
 		});
 	}
 
@@ -187,13 +206,13 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 	};
 }
 
-export function toMarkdown(report: G3CompareReport): string {
+export function toMarkdown(report: BaselineCompareReport): string {
 	const criticalCases = report.cases.filter((entry) => entry.criticalDiffCount > 0 || entry.status === 'error');
 	const lines: string[] = [
-		'# G3 Compare Report',
+		'# Baseline Compare Report',
 		'',
 		'## 1. Scope',
-		'- Compare fixed golden expectations and current parser output using fixed 30-case corpus.',
+		`- Compare fixed expected results and current parser output using fixed ${report.total}-case baseline cases.`,
 		'',
 		'## 2. Corpus Summary',
 		`- Total: ${report.total}`,
@@ -217,6 +236,12 @@ export function toMarkdown(report: G3CompareReport): string {
 	} else {
 		for (const item of criticalCases) {
 			lines.push(`- ${item.id} (${item.group}) ${item.description}`);
+			if (item.multipartFallback) {
+				lines.push(`  - multipart fallback: ${item.multipartFallback.shouldFallback ? 'yes' : 'no'}`);
+				if (item.multipartFallback.reason) {
+					lines.push(`  - fallback reason: ${item.multipartFallback.reason}`);
+				}
+			}
 			if (item.error) {
 				lines.push(`  - expected error: ${item.error.expected ?? ''}`);
 				lines.push(`  - current error: ${item.error.current ?? ''}`);
@@ -227,6 +252,6 @@ export function toMarkdown(report: G3CompareReport): string {
 		}
 	}
 
-	lines.push('', '## 6. Raw Artifacts', '- artifacts/g3/g3-compare.json', '- artifacts/g3/g3-compare.md');
+	lines.push('', '## 6. Raw Artifacts', '- artifacts/baseline-comparison/baseline-report.json', '- artifacts/baseline-comparison/baseline-report.md');
 	return lines.join('\n');
 }

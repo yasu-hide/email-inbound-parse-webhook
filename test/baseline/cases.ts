@@ -1,6 +1,6 @@
 export type RawEmailInput = string | Uint8Array;
 
-export type G3CorpusCase = {
+export type BaselineCase = {
 	id: string;
 	group: 'normal' | 'error';
 	description: string;
@@ -21,7 +21,7 @@ function basicHeaders(overrides: Partial<Record<'from' | 'to' | 'subject' | 'con
 		`To: ${overrides.to ?? 'Receiver <receiver@example.com>'}`,
 	];
 	if (overrides.cc) headers.push(`Cc: ${overrides.cc}`);
-	headers.push(`Subject: ${overrides.subject ?? 'g3 case'}`);
+	headers.push(`Subject: ${overrides.subject ?? 'baseline case'}`);
 	headers.push(`Content-Type: ${overrides.contentType ?? 'text/plain; charset=utf-8'}`);
 	headers.push(`Content-Transfer-Encoding: ${overrides.cte ?? '7bit'}`);
 	return headers;
@@ -41,7 +41,7 @@ function latin1SubjectRaw(subjectPrefix: string): Uint8Array {
 	]);
 }
 
-export const g3Corpus: G3CorpusCase[] = [
+export const baselineCases: BaselineCase[] = [
 	{ id: 'N01', group: 'normal', description: 'ascii plain text', raw: buildPlain('hello') },
 	{ id: 'N02', group: 'normal', description: 'RFC2047 subject B', raw: buildPlain('hello', { subject: '=?UTF-8?B?5ZWT5piO6aSo?=' }) },
 	{ id: 'N03', group: 'normal', description: 'RFC2047 subject Q', raw: buildPlain('hello', { subject: '=?UTF-8?Q?=E5=95=93=E6=98=8E=E9=A4=A8?=' }) },
@@ -154,7 +154,7 @@ export const g3Corpus: G3CorpusCase[] = [
 	{
 		id: 'N23',
 		group: 'normal',
-		description: 'nested multipart mixed + alternative',
+		description: 'nested multipart mixed + alternative (healthy)',
 		raw: joinLines([
 			...basicHeaders({ contentType: 'multipart/mixed; boundary="----outer"' }),
 			'',
@@ -252,5 +252,33 @@ export const g3Corpus: G3CorpusCase[] = [
 		group: 'error',
 		description: 'declared charset mismatched with bytes',
 		raw: buildPlain('caf=E9', { contentType: 'text/plain; charset=utf-8', cte: 'quoted-printable' }),
+	},
+	{
+		id: 'E07',
+		group: 'error',
+		description: 'missing opening boundary marker in body',
+		raw: joinLines([
+			...basicHeaders({ contentType: 'multipart/mixed; boundary="----e07"' }),
+			'',
+			'------actual',
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'plain e07',
+			'------actual--',
+		]),
+	},
+	{
+		id: 'E08',
+		group: 'error',
+		description: 'part header separator is malformed',
+		raw: joinLines([
+			...basicHeaders({ contentType: 'multipart/mixed; boundary="----e08"' }),
+			'',
+			'------e08',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Transfer-Encoding: 7bit',
+			'plain e08 without header-body separator',
+			'------e08--',
+		]),
 	},
 ];
