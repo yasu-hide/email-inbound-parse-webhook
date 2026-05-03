@@ -13,7 +13,8 @@ pnpm run deploy:worker
 `main` ブランチへの push をトリガーに、以下の順序で実行します。
 
 1. `test` ジョブで `pnpm test` を実行
-2. `test` 成功時のみ `deploy` ジョブで `pnpm run deploy:worker` を実行
+2. `test` ジョブで `pnpm run g3:compare:ci` を実行（互換ゲート）
+3. `test` 成功時のみ `deploy` ジョブで `pnpm run deploy:worker` を実行
 
 これにより、テスト失敗時はデプロイされません。
 

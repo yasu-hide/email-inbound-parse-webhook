@@ -37,6 +37,9 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Run G3 compare gate
+        run: pnpm run g3:compare:ci
+
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
