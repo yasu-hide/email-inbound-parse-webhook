@@ -19,7 +19,7 @@
 
 ## テスト拡張候補
 
-- nested multipart（`multipart/mixed` 内に `multipart/alternative`）で本文抽出が維持されることを確認するテストを追加する
+- 現時点ではなし
 
 ### 完了済みのテスト拡張（2026-05-03）
 
@@ -27,6 +27,7 @@
 - Webhook 配信の失敗系（非 2xx / ネットワークエラー）でも reject しないことを確認するテストを追加済み
 - `MAX_MESSAGE_SIZE` 関連（超過、rawSize 未提供、非数値時フォールバック）の判定を確認するテストを追加済み
 - HTML-only メールの抽出を確認するテストを追加済み
+- nested multipart（`multipart/mixed` 内に `multipart/alternative`）で本文抽出が維持されることを確認するテストを追加済み
 
 ## プロダクト上の確認事項
 
@@ -37,15 +38,7 @@
 
 ## リファクタリング候補
 
-- multipart/mixed の単純構造で postal-mime 優先を拡大し、互換フォールバック適用範囲をさらに縮小する（部分完了）
-- multipart 異常系フォールバックの許可条件を最小化し、仕様準拠との境界を明確化する（部分完了）
-
-### 現在の実装方針
-
-- `multipart/mixed` の単純構造は 1 階層（text/plain, text/html, attachment 直下）として扱う
-- 単純構造では postal-mime を優先し、不一致時も postal-mime を正とする
-- 境界異常判定は「開始境界」「終端境界」「パート整合」の中間厳密度で扱う
-- nested multipart（mixed 内 alternative）は本文抽出維持を目標にする
+- 現時点ではなし
 
 ### 完了済みのリファクタリング（2026-05-03）
 
@@ -55,4 +48,7 @@
 - ベースライン比較基盤（30件固定ケース、レポート生成）を整備し、比較基準を固定期待値比較へ移行
 - CI の test job にベースライン比較ゲート（`pnpm run baseline:compare:ci`）を組み込み、デプロイ前の必須チェックとして定着
 - multipart/alternative の正常系では postal-mime 結果を優先し、異常シグナル時のみ互換フォールバックを適用する判定を導入
+- multipart/mixed の単純構造では postal-mime 優先、境界異常や複雑構造ではフォールバック維持とする判定へ更新
+- nested multipart（`multipart/mixed` 内 `multipart/alternative`）で本文抽出を維持する経路を追加
+- multipart 異常系フォールバックを開始境界・終端境界・パート整合で判定し、baseline レポートに理由を出力可能にした
 - 期待値更新運用を実装し、`baseline:update` と PR テンプレで更新理由・影響ケース・再検証ログを明示化
