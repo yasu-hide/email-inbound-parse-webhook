@@ -61,4 +61,55 @@ describe('postal-mime adapter', () => {
 		expect(parsed.subject).toBe('啓明館');
 		expect(parsed.text).toBe('hello');
 	});
+
+	it('prefers postal output for healthy multipart/alternative', async () => {
+		const boundary = '----healthy-alt';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: healthy alternative',
+			`Content-Type: multipart/alternative; boundary="${boundary}"; charset=ISO-2022-JP`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=Shift_JIS',
+			'',
+			'plain healthy body',
+			`--${boundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html healthy body</p>',
+			`--${boundary}--`,
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toContain('plain healthy body');
+		expect(parsed.html).toContain('<p>html healthy body</p>');
+		expect(parsed.textCharset).toBe('iso-2022-jp');
+		expect(parsed.htmlCharset).toBe('iso-2022-jp');
+	});
+
+	it('keeps compatibility fallback for malformed multipart/alternative', async () => {
+		const boundary = '----broken-alt';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: broken alternative',
+			`Content-Type: multipart/alternative; boundary="${boundary}"; charset=ISO-2022-JP`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=Shift_JIS',
+			'',
+			'plain broken body',
+			`--${boundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html broken body</p>',
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toContain('plain broken body');
+		expect(parsed.html).toContain('<p>html broken body</p>');
+		expect(parsed.textCharset).toBe('windows-31j');
+		expect(parsed.htmlCharset).toBe('utf-8');
+	});
 });

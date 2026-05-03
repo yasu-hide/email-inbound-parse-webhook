@@ -73,6 +73,131 @@ function extractRawBody(raw: ArrayBuffer): string {
 	return new TextDecoder('iso-8859-1').decode(bytes.slice(headerEnd + separatorLength));
 }
 
+type MultipartCompatResult = Pick<ParsedResult, 'text' | 'textCharset' | 'html' | 'htmlCharset'>;
+
+function extractMultipartBoundary(contentType: string): string | null {
+	const match = contentType.match(/boundary="?([^";]+)"?/i);
+	return match ? `--${match[1]}` : null;
+}
+
+function parsePartHeaders(rawHeaders: string): Record<string, string> {
+	const headers: Record<string, string> = {};
+	for (const line of rawHeaders.split(/\r?\n/)) {
+		const match = line.match(/^([^:]+):\s*(.*)$/);
+		if (!match) continue;
+		const key = match[1].toLowerCase();
+		const value = match[2];
+		headers[key] = headers[key] ? `${headers[key]}, ${value}` : value;
+	}
+	return headers;
+}
+
+function parseMultipartCompat(rawBody: string, contentTypeHeader: string): MultipartCompatResult {
+	const boundary = extractMultipartBoundary(contentTypeHeader);
+	if (!boundary) return {};
+
+	let buffer = rawBody;
+	const result: MultipartCompatResult = {};
+	const startIdx = buffer.indexOf(boundary);
+	if (startIdx !== -1) {
+		buffer = buffer.slice(startIdx + boundary.length);
+	}
+
+	while (buffer.length > 0) {
+		let separator = '\r\n\r\n';
+		let separatorIndex = buffer.indexOf(separator);
+		if (separatorIndex === -1) {
+			separator = '\n\n';
+			separatorIndex = buffer.indexOf(separator);
+		}
+		if (separatorIndex === -1) {
+			break;
+		}
+
+		const partRawHeaders = buffer.slice(0, separatorIndex);
+		buffer = buffer.slice(separatorIndex + separator.length);
+
+		const partHeaders = parsePartHeaders(partRawHeaders);
+		const partContentType = partHeaders['content-type'] || 'text/plain';
+		const disposition = (partHeaders['content-disposition'] || '').toLowerCase();
+		const contentTransferEncoding = (partHeaders['content-transfer-encoding'] || '').toLowerCase();
+		const isText = /text\/plain/i.test(partContentType);
+		const isHtml = /text\/html/i.test(partContentType);
+		const isAttachment = disposition.includes('attachment') || disposition.includes('filename=');
+
+		let boundaryIndex = buffer.indexOf(`\r\n${boundary}`);
+		let boundaryLength = (`\r\n${boundary}`).length;
+		if (boundaryIndex === -1) {
+			boundaryIndex = buffer.indexOf(`\n${boundary}`);
+			boundaryLength = (`\n${boundary}`).length;
+		}
+
+		let partContent = '';
+		if (boundaryIndex !== -1) {
+			partContent = buffer.slice(0, boundaryIndex);
+			buffer = buffer.slice(boundaryIndex + boundaryLength);
+		} else {
+			partContent = buffer;
+			buffer = '';
+		}
+
+		if (!isAttachment && (isText || isHtml)) {
+			const raw = partContent.replace(/^(\r?\n)/, '');
+			const decoded = decodeBody(raw, contentTransferEncoding, parseCharset(partContentType));
+			if (isText) {
+				result.textCharset = decoded.charset;
+				result.text = result.text ? `${result.text}\n${decoded.text}` : decoded.text;
+			}
+			if (isHtml) {
+				result.htmlCharset = decoded.charset;
+				result.html = result.html ? `${result.html}\n${decoded.text}` : decoded.text;
+			}
+		}
+
+		if (buffer.startsWith('--')) {
+			break;
+		}
+	}
+
+	return result;
+}
+
+function isMultipartAlternative(contentType: string): boolean {
+	return /^multipart\/alternative\b/i.test(contentType);
+}
+
+function hasMultipartAnomaly(rawBody: string, contentTypeHeader: string): boolean {
+	const boundary = extractMultipartBoundary(contentTypeHeader);
+	if (!boundary) return true;
+	const hasOpeningBoundary = rawBody.includes(boundary);
+	const hasClosingBoundary = rawBody.includes(`${boundary}--`);
+	return !hasOpeningBoundary || !hasClosingBoundary;
+}
+
+function shouldUseMultipartCompat(
+	contentType: string,
+	contentTypeHeader: string,
+	rawBody: string,
+	parsed: { text?: string; html?: string },
+): boolean {
+	if (!contentType.includes('multipart/')) {
+		return false;
+	}
+	if (!isMultipartAlternative(contentType)) {
+		return true;
+	}
+	if (hasMultipartAnomaly(rawBody, contentTypeHeader)) {
+		return true;
+	}
+	if (!parsed.text && !parsed.html) {
+		return true;
+	}
+	if (parsed.text?.includes('\uFFFD') || parsed.html?.includes('\uFFFD')) {
+		return true;
+	}
+	return false;
+}
+
 export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Promise<ParsedResult> {
 	const raw = await new Response(stream).arrayBuffer();
 	const parsed = await PostalMime.parse(raw);
@@ -111,11 +236,36 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	const declaredCharset = normalizeCharset(parseCharset(rawHeaders['content-type'])) ?? 'utf-8';
 	const contentType = (rawHeaders['content-type'] || '').toLowerCase();
 	const contentTransferEncoding = (rawHeaders['content-transfer-encoding'] || '').toLowerCase();
-	const canFallbackDecodeText = !contentType.includes('multipart/');
-	const rawBody = canFallbackDecodeText ? extractRawBody(raw) : '';
+	const rawBody = extractRawBody(raw);
+
+	if (shouldUseMultipartCompat(contentType, rawHeaders['content-type'] || '', rawBody, parsed)) {
+		const compatBody = parseMultipartCompat(rawBody, rawHeaders['content-type'] || '');
+		if (compatBody.text) {
+			result.text = stripSingleTrailingNewline(compatBody.text);
+			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
+		}
+		if (compatBody.html) {
+			result.html = stripSingleTrailingNewline(compatBody.html);
+			result.htmlCharset = normalizeCharset(compatBody.htmlCharset) ?? declaredCharset;
+		}
+		return result;
+	}
+
+	if (contentType.includes('multipart/')) {
+		if (parsed.text) {
+			result.text = stripSingleTrailingNewline(parsed.text);
+			result.textCharset = declaredCharset;
+		}
+		if (parsed.html) {
+			result.html = stripSingleTrailingNewline(parsed.html);
+			result.htmlCharset = declaredCharset;
+		}
+		return result;
+	}
+
 	if (parsed.text) {
 		const normalizedText = stripSingleTrailingNewline(parsed.text);
-		if (normalizedText.includes('\uFFFD') && canFallbackDecodeText) {
+		if (normalizedText.includes('\uFFFD')) {
 			const fallback = decodeBody(rawBody, contentTransferEncoding, declaredCharset);
 			result.text = stripSingleTrailingNewline(fallback.text);
 			result.textCharset = normalizeCharset(fallback.charset) ?? declaredCharset;
