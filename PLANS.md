@@ -41,7 +41,8 @@
 
 ## リファクタリング候補
 
-- Workers 互換性およびバンドルサイズが許容範囲であれば、手書き MIME 解析をより堅牢なパーサへ置き換える
+- postal-mime への全面移行を完了する（現状の multipart 宣言時 legacy フォールバックを解消し、経路を一本化する）
+- legacy MIME 解析モジュールの整理方針を確定する（削除または deprecate 維持）
 
 ### 完了済みのリファクタリング（2026-05-03）
 
@@ -49,3 +50,7 @@
 - parser 内部を責務ごとに再分割し、`parseEmailStream(stream, deps?)` の差し替え依存注入インターフェースを導入
 - 文字コード判定/正規化ユーティリティを `src/email-normalizer-utils.ts` に分離し、単体テストを追加
 - `buildWebhookPayload` と `payloadToFormData` を導入し、payload builder の責務を分離（既存 `buildWebhookFormData` は互換ラッパとして維持）
+- postal-mime adapter を導入し、`parseEmailStream` のデフォルト経路を postal-mime ベースへ段階移行
+- 互換維持のため、multipart 宣言メールは legacy 経路へフォールバックするハイブリッド経路を導入
+- G3 比較ランナー（30件固定コーパス）とレポート生成コマンドを追加し、旧経路との一致率を継続検証可能にした
+- CI の test job に G3 互換ゲート（`pnpm run g3:compare:ci`）を追加し、デプロイ前に互換条件を必須化
