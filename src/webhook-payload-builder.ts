@@ -5,34 +5,85 @@ type DeliveryMessage = {
 	to?: string;
 };
 
-export function buildWebhookFormData(parsed: ParsedResult, message: DeliveryMessage): { form: FormData; headerCharsets: Record<string, string> } {
-	const form = new FormData();
-	const headerCharsets: Record<string, string> = {};
+export type WebhookCharsets = {
+	from: string;
+	to: string;
+	subject: string;
+	cc?: string;
+	text?: string;
+	html?: string;
+};
 
-	form.append('from', parsed.from ?? message.from ?? '');
-	headerCharsets['from'] = parsed.from ?? message.from ? 'utf-8' : '';
+export type WebhookPayload = {
+	from: string;
+	to: string;
+	subject: string;
+	cc?: string;
+	text?: string;
+	html?: string;
+	charsets: WebhookCharsets;
+};
 
-	form.append('to', parsed.to ?? message.to ?? '');
-	headerCharsets['to'] = parsed.to ?? message.to ? 'utf-8' : '';
-
-	form.append('subject', parsed.subject ?? '');
-	headerCharsets['subject'] = parsed.subject ? 'utf-8' : '';
+export function buildWebhookPayload(parsed: ParsedResult, message: DeliveryMessage): WebhookPayload {
+	const payload: WebhookPayload = {
+		from: parsed.from ?? message.from ?? '',
+		to: parsed.to ?? message.to ?? '',
+		subject: parsed.subject ?? '',
+		charsets: {
+			from: parsed.from ?? message.from ? 'utf-8' : '',
+			to: parsed.to ?? message.to ? 'utf-8' : '',
+			subject: parsed.subject ? 'utf-8' : '',
+		},
+	};
 
 	if (parsed.cc) {
-		form.append('cc', parsed.cc);
-		headerCharsets['cc'] = 'utf-8';
+		payload.cc = parsed.cc;
+		payload.charsets.cc = 'utf-8';
 	}
 
 	if (parsed.text) {
-		form.append('text', parsed.text);
-		headerCharsets['text'] = parsed.textCharset || '';
+		payload.text = parsed.text;
+		payload.charsets.text = parsed.textCharset || '';
 	}
 
 	if (parsed.html) {
-		form.append('html', parsed.html);
-		headerCharsets['html'] = parsed.htmlCharset || '';
+		payload.html = parsed.html;
+		payload.charsets.html = parsed.htmlCharset || '';
 	}
 
+	return payload;
+}
+
+export function payloadToFormData(payload: WebhookPayload): { form: FormData; headerCharsets: Record<string, string> } {
+	const form = new FormData();
+
+	form.append('from', payload.from);
+	form.append('to', payload.to);
+	form.append('subject', payload.subject);
+
+	if (payload.cc) {
+		form.append('cc', payload.cc);
+	}
+
+	if (payload.text) {
+		form.append('text', payload.text);
+	}
+
+	if (payload.html) {
+		form.append('html', payload.html);
+	}
+
+	const headerCharsets = payload.charsets as Record<string, string>;
 	form.append('charsets', JSON.stringify(headerCharsets));
+
 	return { form, headerCharsets };
+}
+
+/**
+ * @deprecated Prefer buildWebhookPayload + payloadToFormData for new call sites.
+ * Keep this wrapper only for compatibility during migration.
+ */
+export function buildWebhookFormData(parsed: ParsedResult, message: DeliveryMessage): { form: FormData; headerCharsets: Record<string, string> } {
+	const payload = buildWebhookPayload(parsed, message);
+	return payloadToFormData(payload);
 }

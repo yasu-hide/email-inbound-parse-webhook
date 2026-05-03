@@ -10,6 +10,7 @@
 
 - プラットフォーム: Cloudflare Workers
 - トリガー: `email(message, env, ctx)`
+- 補助トリガー: `fetch(request, env, ctx)`
 - エントリポイント: `src/index.ts`
 - 静的アセット: `public/`
 - Observability: `wrangler.jsonc` にて有効化
@@ -40,6 +41,20 @@
 `MAX_MESSAGE_SIZE` が未設定、または数値でない場合、本 Worker は `10485760` バイトを使用します。
 
 ## 4. 処理フロー
+
+### 4.0 fetch 補助エントリポイント
+
+現行実装では、`/internal/payload-preview` に対する `POST` を受け付けます。
+
+payload 契約の回帰観点は `PAYLOAD_CONTRACT_CHECKLIST.md` を参照します。
+
+- 目的: Email ハンドラ以外の入口から payload builder を再利用し、契約確認を可能にする
+- 入力: JSON (`parsed`, `message`)
+- 出力: `payload`, `headerCharsets`, `formFields` の JSON
+- 失敗時:
+  - JSON 不正: `400` (`{ "error": "Invalid JSON body" }`)
+  - HTTP メソッド不正: `405`
+  - 未知パス: `404`
 
 ### 4.1 事前検証
 

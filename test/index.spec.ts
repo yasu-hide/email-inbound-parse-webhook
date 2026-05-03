@@ -76,6 +76,13 @@ async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
 	return { fetchMock, msg };
 }
 
+async function runFetch(request: Request): Promise<Response> {
+	const ctx = createExecutionContext();
+	const response = await worker.fetch(request, {} as any, ctx);
+	await waitOnExecutionContext(ctx);
+	return response;
+}
+
 describe('email worker subject decoding', () => {
 	beforeEach(() => {
 		vi.restoreAllMocks();
@@ -407,5 +414,70 @@ describe('email worker contract', () => {
 		expect(charsets.cc).toBe('utf-8');
 		expect(charsets.text).toBe('utf-8');
 		expect(charsets.html).toBe('utf-8');
+	});
+});
+
+describe('fetch payload preview endpoint', () => {
+	it('returns payload preview using shared payload builder path', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				parsed: {
+					from: 'Parsed Sender <sender@example.com>',
+					to: 'Parsed Receiver <receiver@example.com>',
+					subject: 'preview subject',
+					text: 'preview body',
+					textCharset: 'utf-8',
+				},
+				message: {
+					from: 'fallback-sender@example.com',
+					to: 'fallback-receiver@example.com',
+				},
+			}),
+		});
+
+		const response = await runFetch(request);
+		expect(response.status).toBe(200);
+
+		const json = await response.json<any>();
+		expect(json.payload.from).toBe('Parsed Sender <sender@example.com>');
+		expect(json.payload.to).toBe('Parsed Receiver <receiver@example.com>');
+		expect(json.payload.subject).toBe('preview subject');
+		expect(json.payload.text).toBe('preview body');
+		expect(json.headerCharsets).toEqual({
+			from: 'utf-8',
+			to: 'utf-8',
+			subject: 'utf-8',
+			text: 'utf-8',
+		});
+		expect(json.formFields.from).toBe('Parsed Sender <sender@example.com>');
+		expect(json.formFields.to).toBe('Parsed Receiver <receiver@example.com>');
+		expect(json.formFields.subject).toBe('preview subject');
+		expect(json.formFields.text).toBe('preview body');
+	});
+
+	it('returns 400 when payload preview body is invalid json', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: '{broken',
+		});
+
+		const response = await runFetch(request);
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toEqual({ error: 'Invalid JSON body' });
+	});
+
+	it('returns 405 for non-POST request on payload preview endpoint', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', { method: 'GET' });
+		const response = await runFetch(request);
+		expect(response.status).toBe(405);
+	});
+
+	it('returns 404 for unknown fetch route', async () => {
+		const request = new Request('https://example.test/unknown', { method: 'POST' });
+		const response = await runFetch(request);
+		expect(response.status).toBe(404);
 	});
 });
