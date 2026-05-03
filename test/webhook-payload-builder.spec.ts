@@ -94,6 +94,34 @@ describe('webhook-payload-builder', () => {
 		expect(JSON.parse(body.charsets)).toEqual(headerCharsets);
 	});
 
+	it('omits optional payload fields when values are empty strings', () => {
+		const payload = buildWebhookPayload(
+			makeParsed({
+				from: 'Parsed From <from@example.com>',
+				to: 'Parsed To <to@example.com>',
+				subject: '',
+				cc: '',
+				text: '',
+				html: '',
+			}),
+			{},
+		);
+		const { form, headerCharsets } = payloadToFormData(payload);
+		const body = formToObject(form);
+
+		expect(body.from).toBe('Parsed From <from@example.com>');
+		expect(body.to).toBe('Parsed To <to@example.com>');
+		expect(body.subject).toBe('');
+		expect(body.cc).toBeUndefined();
+		expect(body.text).toBeUndefined();
+		expect(body.html).toBeUndefined();
+		expect(headerCharsets).toEqual({
+			from: 'utf-8',
+			to: 'utf-8',
+			subject: '',
+		});
+	});
+
 	it('keeps wrapper compatibility with the new two-step builder across matrix cases', () => {
 		const cases: Array<{ parsed: Partial<ParsedResult>; message: { from?: string; to?: string } }> = [
 			{

@@ -8,6 +8,7 @@ import {
 import { readHeaderSection as defaultReadHeaderSection } from './email-parser/header-section-reader';
 import { parseMultipartBody as defaultParseMultipartBody } from './email-parser/multipart-scanner';
 import { parseSinglepartBody as defaultParseSinglepartBody } from './email-parser/singlepart-reader';
+import { parseEmailStreamWithPostalMime } from './email-parser/postal-mime-adapter';
 import type { ParsedResult } from './email-parser/types';
 
 export type { ParsedResult } from './email-parser/types';
@@ -34,7 +35,7 @@ export const defaultParserDependencies: EmailParserDependencies = {
 	parseSinglepartBody: defaultParseSinglepartBody,
 };
 
-export async function parseEmailStream(stream: ReadableStream, deps: Partial<EmailParserDependencies> = {}): Promise<ParsedResult> {
+async function parseEmailStreamWithDependencies(stream: ReadableStream, deps: Partial<EmailParserDependencies>): Promise<ParsedResult> {
 	const parserDeps: EmailParserDependencies = {
 		...defaultParserDependencies,
 		...deps,
@@ -68,4 +69,34 @@ export async function parseEmailStream(stream: ReadableStream, deps: Partial<Ema
 		});
 
 	return { ...result, ...body };
+}
+
+async function shouldUseLegacyForMultipart(stream: ReadableStream): Promise<boolean> {
+	try {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder('utf-8');
+		const { rawHeaders } = await defaultReadHeaderSection(reader, decoder);
+		const headers = defaultParseRawHeaderMap(rawHeaders);
+		const contentType = (headers['content-type'] || '').toLowerCase();
+		return /multipart\//.test(contentType);
+	} catch (_error) {
+		return false;
+	}
+}
+
+export async function parseEmailStream(stream: ReadableStream, deps: Partial<EmailParserDependencies> = {}): Promise<ParsedResult> {
+	if (!stream || typeof (stream as any).getReader !== 'function') {
+		throw new TypeError('stream.getReader is not a function');
+	}
+
+	if (Object.keys(deps).length > 0) {
+		return parseEmailStreamWithDependencies(stream, deps);
+	}
+
+	const [inspectStream, parseStream] = stream.tee();
+	if (await shouldUseLegacyForMultipart(inspectStream)) {
+		return parseEmailStreamWithDependencies(parseStream, {});
+	}
+
+	return parseEmailStreamWithPostalMime(parseStream);
 }

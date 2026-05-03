@@ -8,6 +8,38 @@ async function parseRaw(raw: string | Uint8Array) {
 }
 
 describe('email parser', () => {
+	it('decodes quoted-printable text/plain body', async () => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: qp body',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Transfer-Encoding: quoted-printable',
+			'',
+			'hello=20world=21',
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe('hello world!');
+		expect(parsed.textCharset).toBe('utf-8');
+	});
+
+	it('decodes base64 text/plain body', async () => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: base64 body',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Transfer-Encoding: base64',
+			'',
+			'aGVsbG8gd29ybGQh',
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe('hello world!');
+		expect(parsed.textCharset).toBe('utf-8');
+	});
+
 	it('parses multipart mail and ignores attachment part', async () => {
 		const boundary = '----boundary123';
 		const raw = [
@@ -37,6 +69,29 @@ describe('email parser', () => {
 		expect(parsed.to).toBe('Receiver <receiver@example.com>');
 		expect(parsed.text).toContain('plain body');
 		expect(parsed.html).toContain('<p>html body</p>');
+	});
+
+	it('parses multipart body even when final closing boundary is missing', async () => {
+		const boundary = '----missing-close';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: boundary missing',
+			`Content-Type: multipart/mixed; boundary="${boundary}"`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'plain body without close boundary',
+			`--${boundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html body without close boundary</p>',
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toContain('plain body without close boundary');
+		expect(parsed.html).toContain('<p>html body without close boundary</p>');
 	});
 
 	it('parses non-multipart html body', async () => {
