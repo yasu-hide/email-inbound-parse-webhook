@@ -2,13 +2,63 @@ import { ensureWebhookConfigured, rejectIfMessageTooLarge, rejectParsingError } 
 import { parseEmailStream } from './email-parser';
 import { postWebhook } from './webhook-client';
 import { buildWebhookPayload, payloadToFormData } from './webhook-payload-builder';
+import type { ParsedResult } from './email-parser';
 
 type WorkerEnv = Env & {
 	WEBHOOK_URL?: string;
 	MAX_MESSAGE_SIZE?: number;
 };
 
+const PAYLOAD_PREVIEW_PATH = '/internal/payload-preview';
+
+type PayloadPreviewRequest = {
+	parsed?: Partial<ParsedResult>;
+	message?: {
+		from?: string;
+		to?: string;
+	};
+};
+
+function formDataToObject(form: FormData): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [key, value] of form.entries()) {
+		out[key] = String(value);
+	}
+	return out;
+}
+
 export default {
+	async fetch(request: Request) {
+		const url = new URL(request.url);
+		if (url.pathname !== PAYLOAD_PREVIEW_PATH) {
+			return new Response('Not Found', { status: 404 });
+		}
+
+		if (request.method !== 'POST') {
+			return new Response('Method Not Allowed', { status: 405 });
+		}
+
+		let body: PayloadPreviewRequest;
+		try {
+			body = await request.json<PayloadPreviewRequest>();
+		} catch (_error) {
+			return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+		}
+
+		const parsed: ParsedResult = {
+			headers: {},
+			...(body.parsed ?? {}),
+		};
+		const payload = buildWebhookPayload(parsed, body.message ?? {});
+		const { form, headerCharsets } = payloadToFormData(payload);
+
+		return Response.json({
+			payload,
+			headerCharsets,
+			formFields: formDataToObject(form),
+		});
+	},
+
 	async email(message, env: WorkerEnv, ctx) {
 		console.info('email.received', { from: message.from, to: message.to, rawSize: (message as any).rawSize });
 
