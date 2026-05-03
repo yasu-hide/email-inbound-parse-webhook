@@ -23,14 +23,10 @@
 
 ### 完了済みのテスト拡張（2026-05-03）
 
-- `text/plain` と `text/html` の両方を含む multipart メールの結合テストを追加済み
-- 添付ファイル付き multipart メールで添付を無視しつつ本文抽出が維持されることを確認するテストを追加済み
-- Webhook が非 2xx を返す場合に reject しないテストを追加済み
-- Webhook のネットワークエラー時に reject しないテストを追加済み
-- `MAX_MESSAGE_SIZE` 超過による reject のテストを追加済み
-- `message.rawSize` が未提供の場合にサイズ reject 判定をスキップするテストを追加済み
-- `MAX_MESSAGE_SIZE` が非数値の場合に既定値へフォールバックするテストを追加済み
-- HTML のみを含むメールのテストを追加済み
+- multipart（text/plain + text/html、添付あり、境界異常）で本文抽出が維持されることを確認するテストを追加済み
+- Webhook 配信の失敗系（非 2xx / ネットワークエラー）でも reject しないことを確認するテストを追加済み
+- `MAX_MESSAGE_SIZE` 関連（超過、rawSize 未提供、非数値時フォールバック）の判定を確認するテストを追加済み
+- HTML-only メールの抽出を確認するテストを追加済み
 
 ## プロダクト上の確認事項
 
@@ -41,16 +37,15 @@
 
 ## リファクタリング候補
 
-- postal-mime への全面移行を完了する（現状の multipart 宣言時 legacy フォールバックを解消し、経路を一本化する）
-- legacy MIME 解析モジュールの整理方針を確定する（削除または deprecate 維持）
+- multipart/mixed の単純構造で postal-mime 優先を拡大し、互換フォールバック適用範囲をさらに縮小する
+- multipart 異常系フォールバックの許可条件を最小化し、仕様準拠との境界を明確化する
 
 ### 完了済みのリファクタリング（2026-05-03）
 
-- 解析、正規化、配信の責務分割（第1段階）を完了
-- parser 内部を責務ごとに再分割し、`parseEmailStream(stream, deps?)` の差し替え依存注入インターフェースを導入
-- 文字コード判定/正規化ユーティリティを `src/email-normalizer-utils.ts` に分離し、単体テストを追加
-- `buildWebhookPayload` と `payloadToFormData` を導入し、payload builder の責務を分離（既存 `buildWebhookFormData` は互換ラッパとして維持）
-- postal-mime adapter を導入し、`parseEmailStream` のデフォルト経路を postal-mime ベースへ段階移行
-- 互換維持のため、multipart 宣言メールは legacy 経路へフォールバックするハイブリッド経路を導入
-- G3 比較ランナー（30件固定コーパス）とレポート生成コマンドを追加し、旧経路との一致率を継続検証可能にした
-- CI の test job に G3 互換ゲート（`pnpm run g3:compare:ci`）を追加し、デプロイ前に互換条件を必須化
+- 解析・正規化・配信の責務分割を完了し、parser/payload builder/文字コードユーティリティを再編
+- postal-mime adapter を導入して段階移行を実施し、最終的に `parseEmailStream` を postal-mime 単一路線へ統一
+- 互換維持のために導入した legacy フォールバックと依存注入引数を廃止し、legacy MIME 解析モジュールを削除
+- G3 比較基盤（30件固定コーパス、レポート生成）を整備し、比較基準をゴールデン期待値比較へ移行
+- CI の test job に G3 互換ゲート（`pnpm run g3:compare:ci`）を組み込み、デプロイ前の必須チェックとして定着
+- multipart/alternative の正常系では postal-mime 結果を優先し、異常シグナル時のみ互換フォールバックを適用する判定を導入
+- G3 ゴールデン更新運用を実装し、`g3:golden:update` と PR テンプレで更新理由・影響ケース・再検証ログを明示化

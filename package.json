@@ -11,6 +11,7 @@
 		"test:watch": "vitest",
 		"g3:compare": "tsx scripts/g3-compare.ts",
 		"g3:compare:ci": "G3_GATE=1 tsx scripts/g3-compare.ts",
+		"g3:golden:update": "tsx scripts/g3-golden-update.ts",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {

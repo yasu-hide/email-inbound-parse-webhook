@@ -1,7 +1,8 @@
-import { defaultParserDependencies, parseEmailStream, type ParsedResult } from '../../src/email-parser';
+import { parseEmailStream, type ParsedResult } from '../../src/email-parser';
 import { buildWebhookPayload } from '../../src/webhook-payload-builder';
 import { compareParsedAndPayload, type DiffItem } from './compare-helpers';
 import { g3Corpus, type RawEmailInput } from './corpus';
+import goldenCases from './golden.json';
 
 export type ParseResult =
 	| { ok: true; parsed: ParsedResult }
@@ -15,7 +16,7 @@ export type CaseReport = {
 	criticalDiffCount: number;
 	diffs: DiffItem[];
 	error?: {
-		legacy?: string;
+		expected?: string;
 		current?: string;
 	};
 };
@@ -48,16 +49,14 @@ function toStream(raw: RawEmailInput): ReadableStream {
 	return stream;
 }
 
-async function parseLegacy(raw: RawEmailInput): Promise<ParseResult> {
-	try {
-		const parsed = await parseEmailStream(toStream(raw), {
-			decodeBody: defaultParserDependencies.decodeBody,
-		});
-		return { ok: true, parsed };
-	} catch (error) {
-		return { ok: false, error: String(error) };
-	}
-}
+type GoldenCase =
+	| { id: string; status: 'ok'; parsed: ParsedResult; payload: ReturnType<typeof buildWebhookPayload> }
+	| { id: string; status: 'error'; error: string };
+
+const goldenCaseList = goldenCases as GoldenCase[];
+const goldenCaseMap = new Map<string, GoldenCase>(
+	goldenCaseList.map((entry) => [entry.id, entry]),
+);
 
 async function parseCurrent(raw: RawEmailInput): Promise<ParseResult> {
 	try {
@@ -70,13 +69,34 @@ async function parseCurrent(raw: RawEmailInput): Promise<ParseResult> {
 
 export async function runG3Comparison(): Promise<G3CompareReport> {
 	const reports: CaseReport[] = [];
+	const corpusIdSet = new Set(g3Corpus.map((entry) => entry.id));
 
 	for (const testCase of g3Corpus) {
-		const legacy = await parseLegacy(testCase.raw);
+		const expected = goldenCaseMap.get(testCase.id);
+		if (!expected) {
+			reports.push({
+				id: testCase.id,
+				group: testCase.group,
+				description: testCase.description,
+				status: 'error',
+				criticalDiffCount: 1,
+				diffs: [{
+					field: 'golden',
+					category: 'payload_missing',
+					critical: true,
+					legacyValue: 'present',
+					currentValue: 'missing',
+					note: 'golden_case_missing',
+				}],
+				error: { expected: 'golden case missing', current: undefined },
+			});
+			continue;
+		}
+
 		const current = await parseCurrent(testCase.raw);
 
-		if (!legacy.ok || !current.ok) {
-			const sameError = !legacy.ok && !current.ok && legacy.error === current.error;
+		if (expected.status === 'error' || !current.ok) {
+			const sameError = expected.status === 'error' && !current.ok && expected.error === current.error;
 			reports.push({
 				id: testCase.id,
 				group: testCase.group,
@@ -89,14 +109,18 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 						field: 'parse',
 						category: 'payload_missing',
 						critical: true,
-						legacyValue: legacy.ok ? '' : legacy.error,
+						legacyValue: expected.status === 'error' ? expected.error : '',
 						currentValue: current.ok ? '' : current.error,
 					}],
 				error: {
-					legacy: legacy.ok ? undefined : legacy.error,
+					expected: expected.status === 'error' ? expected.error : undefined,
 					current: current.ok ? undefined : current.error,
 				},
 			});
+			continue;
+		}
+
+		if (expected.status !== 'ok') {
 			continue;
 		}
 
@@ -104,9 +128,8 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 			from: testCase.envelope?.from ?? 'sender@example.com',
 			to: testCase.envelope?.to ?? 'receiver@example.com',
 		};
-		const legacyPayload = buildWebhookPayload(legacy.parsed, envelope);
 		const currentPayload = buildWebhookPayload(current.parsed, envelope);
-		const diffs = compareParsedAndPayload(legacy.parsed, current.parsed, legacyPayload, currentPayload);
+		const diffs = compareParsedAndPayload(expected.parsed, current.parsed, expected.payload, currentPayload);
 		const criticalDiffCount = diffs.filter((item) => item.critical).length;
 		reports.push({
 			id: testCase.id,
@@ -115,6 +138,28 @@ export async function runG3Comparison(): Promise<G3CompareReport> {
 			status: criticalDiffCount > 0 ? 'critical_diff' : 'match',
 			criticalDiffCount,
 			diffs,
+		});
+	}
+
+	for (const expected of goldenCaseList) {
+		if (corpusIdSet.has(expected.id)) {
+			continue;
+		}
+		reports.push({
+			id: expected.id,
+			group: 'error',
+			description: 'golden case exists but corpus entry is missing',
+			status: 'error',
+			criticalDiffCount: 1,
+			diffs: [{
+				field: 'corpus',
+				category: 'payload_missing',
+				critical: true,
+				legacyValue: 'missing',
+				currentValue: 'present',
+				note: 'corpus_case_missing',
+			}],
+			error: { expected: 'golden case has no corpus case', current: undefined },
 		});
 	}
 
@@ -148,7 +193,7 @@ export function toMarkdown(report: G3CompareReport): string {
 		'# G3 Compare Report',
 		'',
 		'## 1. Scope',
-		'- Compare legacy DI parser path and current postal-mime default path using fixed 30-case corpus.',
+		'- Compare fixed golden expectations and current parser output using fixed 30-case corpus.',
 		'',
 		'## 2. Corpus Summary',
 		`- Total: ${report.total}`,
@@ -173,7 +218,7 @@ export function toMarkdown(report: G3CompareReport): string {
 		for (const item of criticalCases) {
 			lines.push(`- ${item.id} (${item.group}) ${item.description}`);
 			if (item.error) {
-				lines.push(`  - legacy error: ${item.error.legacy ?? ''}`);
+				lines.push(`  - expected error: ${item.error.expected ?? ''}`);
 				lines.push(`  - current error: ${item.error.current ?? ''}`);
 			}
 			for (const diff of item.diffs.filter((entry) => entry.critical)) {
