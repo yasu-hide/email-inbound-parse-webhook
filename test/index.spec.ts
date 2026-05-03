@@ -266,6 +266,40 @@ describe('email worker contract', () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it('does not reject when message size equals MAX_MESSAGE_SIZE', async () => {
+		const raw = buildRawEmail('equal size');
+		const { fetchMock, msg } = await runEmail(raw, {
+			env: {
+				WEBHOOK_URL: 'https://example.test/webhook',
+				MAX_MESSAGE_SIZE: raw.length,
+			},
+		});
+
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects with Parsing error when parser throws', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		const msg = {
+			from: 'sender@example.com',
+			to: 'receiver@example.com',
+			raw: {} as ReadableStream,
+			rawSize: 100,
+			setReject: vi.fn(),
+		};
+		const ctx = createExecutionContext();
+
+		await worker.email(msg as any, { WEBHOOK_URL: 'https://example.test/webhook' } as any, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(msg.setReject).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).toHaveBeenCalledWith('Parsing error');
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it('does not reject when webhook returns non-2xx', async () => {
 		const raw = buildRawEmail('non 2xx');
 		const fetchMock = vi.fn().mockResolvedValue(new Response('bad', { status: 500 }));
@@ -308,5 +342,38 @@ describe('email worker contract', () => {
 		expect(charsets.from).toBe('utf-8');
 		expect(charsets.to).toBe('utf-8');
 		expect(charsets.subject).toBe('');
+	});
+
+	it('sends multipart payload fields for text html and cc', async () => {
+		const boundary = '----integration-boundary';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Cc: Carbon Copy <cc@example.com>',
+			'Subject: multipart integration',
+			`Content-Type: multipart/alternative; boundary="${boundary}"`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'plain integration body',
+			`--${boundary}`,
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html integration body</p>',
+			`--${boundary}--`,
+		].join('\r\n');
+
+		const form = await runEmailWithRaw(raw);
+		expect(form.get('cc')).toBe('Carbon Copy <cc@example.com>');
+		expect(form.get('text')).toContain('plain integration body');
+		expect(form.get('html')).toContain('<p>html integration body</p>');
+
+		const charsetsRaw = form.get('charsets');
+		expect(typeof charsetsRaw).toBe('string');
+		const charsets = JSON.parse(String(charsetsRaw)) as Record<string, string>;
+		expect(charsets.cc).toBe('utf-8');
+		expect(charsets.text).toBe('utf-8');
+		expect(charsets.html).toBe('utf-8');
 	});
 });
