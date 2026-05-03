@@ -12,6 +12,11 @@ type TestMessage = {
 
 type RawEmailInput = string | Uint8Array;
 
+type RunEmailOptions = {
+	env?: Record<string, unknown>;
+	fetchImpl?: ReturnType<typeof vi.fn>;
+};
+
 function buildRawEmail(
 	subjectHeader: string,
 	fromHeader = 'Sender <sender@example.com>',
@@ -47,14 +52,7 @@ async function runEmailWithSubject(subjectHeader: string): Promise<FormData> {
 }
 
 async function runEmailWithRaw(raw: RawEmailInput): Promise<FormData> {
-	const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
-	vi.stubGlobal('fetch', fetchMock);
-
-	const msg = createMessage(raw);
-	const ctx = createExecutionContext();
-
-	await worker.email(msg as any, { WEBHOOK_URL: 'https://example.test/webhook' } as any, ctx);
-	await waitOnExecutionContext(ctx);
+	const { fetchMock, msg } = await runEmail(raw);
 
 	expect(msg.setReject).not.toHaveBeenCalled();
 	expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -62,6 +60,20 @@ async function runEmailWithRaw(raw: RawEmailInput): Promise<FormData> {
 	const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 	expect(init.body).toBeInstanceOf(FormData);
 	return init.body as FormData;
+}
+
+async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
+	const fetchMock = options.fetchImpl ?? vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+	vi.stubGlobal('fetch', fetchMock);
+
+	const msg = createMessage(raw);
+	const ctx = createExecutionContext();
+	const env = (options.env ?? { WEBHOOK_URL: 'https://example.test/webhook' }) as any;
+
+	await worker.email(msg as any, env, ctx);
+	await waitOnExecutionContext(ctx);
+
+	return { fetchMock, msg };
 }
 
 describe('email worker subject decoding', () => {
@@ -218,5 +230,83 @@ describe('email worker subject decoding', () => {
 		expect(typeof charsetsRaw).toBe('string');
 		const charsets = JSON.parse(String(charsetsRaw)) as Record<string, string>;
 		expect(charsets.subject).toBe('utf-8');
+	});
+});
+
+describe('email worker contract', () => {
+	beforeEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('rejects when WEBHOOK_URL is missing', async () => {
+		const raw = buildRawEmail('missing webhook');
+		const { fetchMock, msg } = await runEmail(raw, { env: {} });
+
+		expect(msg.setReject).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).toHaveBeenCalledWith('WEBHOOK_URL not configured');
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects when message size exceeds MAX_MESSAGE_SIZE', async () => {
+		const raw = buildRawEmail('too large');
+		const maxSize = raw.length - 1;
+		const { fetchMock, msg } = await runEmail(raw, {
+			env: {
+				WEBHOOK_URL: 'https://example.test/webhook',
+				MAX_MESSAGE_SIZE: maxSize,
+			},
+		});
+
+		expect(msg.setReject).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).toHaveBeenCalledWith('Message too large');
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('does not reject when webhook returns non-2xx', async () => {
+		const raw = buildRawEmail('non 2xx');
+		const fetchMock = vi.fn().mockResolvedValue(new Response('bad', { status: 500 }));
+		const { msg } = await runEmail(raw, {
+			env: { WEBHOOK_URL: 'https://example.test/webhook' },
+			fetchImpl: fetchMock,
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).not.toHaveBeenCalled();
+	});
+
+	it('does not reject when webhook request throws', async () => {
+		const raw = buildRawEmail('network error');
+		const fetchMock = vi.fn().mockRejectedValue(new Error('network down'));
+		const { msg } = await runEmail(raw, {
+			env: { WEBHOOK_URL: 'https://example.test/webhook' },
+			fetchImpl: fetchMock,
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).not.toHaveBeenCalled();
+	});
+
+	it('always sends required payload fields', async () => {
+		const raw = [
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'hello',
+		].join('\r\n');
+		const form = await runEmailWithRaw(raw);
+
+		expect(form.get('from')).toBe('sender@example.com');
+		expect(form.get('to')).toBe('receiver@example.com');
+		expect(form.get('subject')).toBe('');
+
+		const charsetsRaw = form.get('charsets');
+		expect(typeof charsetsRaw).toBe('string');
+		const charsets = JSON.parse(String(charsetsRaw)) as Record<string, string>;
+		expect(charsets.from).toBe('utf-8');
+		expect(charsets.to).toBe('utf-8');
+		expect(charsets.subject).toBe('');
 	});
 });
