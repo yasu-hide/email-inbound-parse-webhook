@@ -1,7 +1,7 @@
 import { ensureWebhookConfigured, rejectIfMessageTooLarge, rejectParsingError } from './inbound-policy';
 import { parseEmailStream } from './email-parser';
 import { postWebhook } from './webhook-client';
-import { buildWebhookFormData } from './webhook-payload-builder';
+import { buildWebhookPayload, payloadToFormData } from './webhook-payload-builder';
 
 type WorkerEnv = Env & {
 	WEBHOOK_URL?: string;
@@ -25,10 +25,11 @@ export default {
 			return;
 		}
 
-		const { form, headerCharsets } = buildWebhookFormData(parsed, {
+		const payload = buildWebhookPayload(parsed, {
 			from: message.from,
 			to: message.to,
 		});
+		const { form, headerCharsets } = payloadToFormData(payload);
 
 		console.info('email.parsed', {
 			from: parsed.from ?? message.from,
