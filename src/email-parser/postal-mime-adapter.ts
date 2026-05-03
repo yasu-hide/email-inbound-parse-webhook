@@ -351,7 +351,9 @@ function shouldUseMultipartCompat(
 }
 
 function toContiguousArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+	const contiguous = new Uint8Array(bytes.byteLength);
+	contiguous.set(bytes);
+	return contiguous.buffer;
 }
 
 export async function inspectMultipartFallbackForRawInput(rawInput: string | Uint8Array): Promise<MultipartFallbackInspection> {

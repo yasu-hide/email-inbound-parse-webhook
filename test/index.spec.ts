@@ -78,7 +78,7 @@ async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
 
 async function runFetch(request: Request): Promise<Response> {
 	const ctx = createExecutionContext();
-	const response = await worker.fetch(request, {} as any, ctx);
+	const response = await (worker.fetch as (request: Request, env: unknown, ctx: ExecutionContext) => Promise<Response>)(request, {} as any, ctx);
 	await waitOnExecutionContext(ctx);
 	return response;
 }
