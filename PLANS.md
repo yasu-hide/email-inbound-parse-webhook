@@ -6,7 +6,7 @@
 
 - 共有 Secret ヘッダやリクエスト署名など、Webhook 認証を追加する
 - 下流システムで必要となる場合に備え、添付ファイルのメタデータまたは本体を転送可能にする
-- `multipart/alternative` および `multipart/mixed` を含む、より複雑な multipart 構造への対応を強化する
+- `multipart/related` やより深いネストを含む複雑な multipart 構造への対応を強化する
 - Webhook 配信失敗時に備え、再送またはキューイング機構を追加する
 - 外部向け Webhook ペイロード契約にバージョンを導入する
 
@@ -44,8 +44,8 @@
 
 - 解析・正規化・配信の責務分割を完了し、parser/payload builder/文字コードユーティリティを再編
 - postal-mime adapter を導入して段階移行を実施し、最終的に `parseEmailStream` を postal-mime 単一路線へ統一
-- 互換維持のために導入した legacy フォールバックと依存注入引数を廃止し、legacy MIME 解析モジュールを削除
-- ベースライン比較基盤（30件固定ケース、レポート生成）を整備し、比較基準を固定期待値比較へ移行
+- 互換維持のために導入した legacy MIME 解析モジュールと依存注入引数を廃止し、postal-mime 本線 + 互換フォールバック判定へ再編
+- ベースライン比較基盤（32件固定ケース、レポート生成）を整備し、比較基準を固定期待値比較へ移行
 - CI の test job にベースライン比較ゲート（`pnpm run baseline:compare:ci`）を組み込み、デプロイ前の必須チェックとして定着
 - multipart/alternative の正常系では postal-mime 結果を優先し、異常シグナル時のみ互換フォールバックを適用する判定を導入
 - multipart/mixed の単純構造では postal-mime 優先、境界異常や複雑構造ではフォールバック維持とする判定へ更新

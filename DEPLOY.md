@@ -18,7 +18,7 @@ pnpm run deploy:worker
 
 これにより、テスト失敗時はデプロイされません。
 
-`baseline:compare:ci` は、30件の固定ケースに対して現行出力が期待値と一致すること（`matchRate >= 99%` かつ `critical = 0`）を確認します。
+`baseline:compare:ci` は、32件の固定ケースに対して現行出力が期待値と一致すること（`matchRate >= 99%` かつ `critical = 0`）を確認します。
 
 期待値の更新が必要な場合は、`pnpm run baseline:update` を実行したうえで `pnpm run baseline:compare:ci` の再実行結果を PR に記載してください。
 
