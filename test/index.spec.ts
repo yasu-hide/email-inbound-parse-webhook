@@ -78,7 +78,7 @@ async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
 
 async function runFetch(request: Request): Promise<Response> {
 	const ctx = createExecutionContext();
-	const response = await worker.fetch(request, {} as any, ctx);
+	const response = await (worker.fetch as (request: Request, env: unknown, ctx: ExecutionContext) => Promise<Response>)(request, {} as any, ctx);
 	await waitOnExecutionContext(ctx);
 	return response;
 }
@@ -114,6 +114,26 @@ describe('email worker subject decoding', () => {
 			'hello',
 		].join('\r\n'));
 		expect(form.get('subject')).toBe('啓明館');
+	});
+
+	it('keeps malformed encoded-word subject without throwing', async () => {
+		const malformed = '=?UTF-8?B?5ZWT5piO6aSo?';
+		const form = await runEmailWithRaw(buildRawEmail(malformed));
+		expect(form.get('subject')).toBe(malformed);
+	});
+
+	it('keeps first subject line when folded header continuation is malformed', async () => {
+		const form = await runEmailWithRaw([
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: valid prefix',
+			'broken continuation without colon',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Transfer-Encoding: 7bit',
+			'',
+			'hello',
+		].join('\r\n'));
+		expect(form.get('subject')).toBe('valid prefix');
 	});
 
 	it('decodes RFC2047 base64 display-name in From and To', async () => {
@@ -414,6 +434,27 @@ describe('email worker contract', () => {
 		expect(charsets.cc).toBe('utf-8');
 		expect(charsets.text).toBe('utf-8');
 		expect(charsets.html).toBe('utf-8');
+	});
+
+	it('does not reject when multipart boundary declaration does not match body', async () => {
+		const declaredBoundary = '----declared-boundary';
+		const actualBoundary = '----actual-boundary';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: malformed boundary',
+			`Content-Type: multipart/mixed; boundary="${declaredBoundary}"`,
+			'',
+			`--${actualBoundary}`,
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'hello from malformed boundary',
+			`--${actualBoundary}--`,
+		].join('\r\n');
+
+		const { fetchMock, msg } = await runEmail(raw);
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });
 

@@ -37,6 +37,9 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Run baseline compare gate
+        run: pnpm run baseline:compare:ci
+
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15

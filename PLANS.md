@@ -19,18 +19,15 @@
 
 ## テスト拡張候補
 
-- nested multipart（`multipart/mixed` 内に `multipart/alternative`）で本文抽出が維持されることを確認するテストを追加する
+- 現時点ではなし
 
 ### 完了済みのテスト拡張（2026-05-03）
 
-- `text/plain` と `text/html` の両方を含む multipart メールの結合テストを追加済み
-- 添付ファイル付き multipart メールで添付を無視しつつ本文抽出が維持されることを確認するテストを追加済み
-- Webhook が非 2xx を返す場合に reject しないテストを追加済み
-- Webhook のネットワークエラー時に reject しないテストを追加済み
-- `MAX_MESSAGE_SIZE` 超過による reject のテストを追加済み
-- `message.rawSize` が未提供の場合にサイズ reject 判定をスキップするテストを追加済み
-- `MAX_MESSAGE_SIZE` が非数値の場合に既定値へフォールバックするテストを追加済み
-- HTML のみを含むメールのテストを追加済み
+- multipart（text/plain + text/html、添付あり、境界異常）で本文抽出が維持されることを確認するテストを追加済み
+- Webhook 配信の失敗系（非 2xx / ネットワークエラー）でも reject しないことを確認するテストを追加済み
+- `MAX_MESSAGE_SIZE` 関連（超過、rawSize 未提供、非数値時フォールバック）の判定を確認するテストを追加済み
+- HTML-only メールの抽出を確認するテストを追加済み
+- nested multipart（`multipart/mixed` 内に `multipart/alternative`）で本文抽出が維持されることを確認するテストを追加済み
 
 ## プロダクト上の確認事項
 
@@ -41,11 +38,17 @@
 
 ## リファクタリング候補
 
-- Workers 互換性およびバンドルサイズが許容範囲であれば、手書き MIME 解析をより堅牢なパーサへ置き換える
+- 現時点ではなし
 
 ### 完了済みのリファクタリング（2026-05-03）
 
-- 解析、正規化、配信の責務分割（第1段階）を完了
-- parser 内部を責務ごとに再分割し、`parseEmailStream(stream, deps?)` の差し替え依存注入インターフェースを導入
-- 文字コード判定/正規化ユーティリティを `src/email-normalizer-utils.ts` に分離し、単体テストを追加
-- `buildWebhookPayload` と `payloadToFormData` を導入し、payload builder の責務を分離（既存 `buildWebhookFormData` は互換ラッパとして維持）
+- 解析・正規化・配信の責務分割を完了し、parser/payload builder/文字コードユーティリティを再編
+- postal-mime adapter を導入して段階移行を実施し、最終的に `parseEmailStream` を postal-mime 単一路線へ統一
+- 互換維持のために導入した legacy フォールバックと依存注入引数を廃止し、legacy MIME 解析モジュールを削除
+- ベースライン比較基盤（30件固定ケース、レポート生成）を整備し、比較基準を固定期待値比較へ移行
+- CI の test job にベースライン比較ゲート（`pnpm run baseline:compare:ci`）を組み込み、デプロイ前の必須チェックとして定着
+- multipart/alternative の正常系では postal-mime 結果を優先し、異常シグナル時のみ互換フォールバックを適用する判定を導入
+- multipart/mixed の単純構造では postal-mime 優先、境界異常や複雑構造ではフォールバック維持とする判定へ更新
+- nested multipart（`multipart/mixed` 内 `multipart/alternative`）で本文抽出を維持する経路を追加
+- multipart 異常系フォールバックを開始境界・終端境界・パート整合で判定し、baseline レポートに理由を出力可能にした
+- 期待値更新運用を実装し、`baseline:update` と PR テンプレで更新理由・影響ケース・再検証ログを明示化

@@ -13,9 +13,14 @@ pnpm run deploy:worker
 `main` ブランチへの push をトリガーに、以下の順序で実行します。
 
 1. `test` ジョブで `pnpm test` を実行
-2. `test` 成功時のみ `deploy` ジョブで `pnpm run deploy:worker` を実行
+2. `test` ジョブで `pnpm run baseline:compare:ci` を実行（固定期待値との比較ゲート）
+3. `test` 成功時のみ `deploy` ジョブで `pnpm run deploy:worker` を実行
 
 これにより、テスト失敗時はデプロイされません。
+
+`baseline:compare:ci` は、30件の固定ケースに対して現行出力が期待値と一致すること（`matchRate >= 99%` かつ `critical = 0`）を確認します。
+
+期待値の更新が必要な場合は、`pnpm run baseline:update` を実行したうえで `pnpm run baseline:compare:ci` の再実行結果を PR に記載してください。
 
 Workflow は [.github/workflows/deploy.yml](.github/workflows/deploy.yml) に定義します。
 
