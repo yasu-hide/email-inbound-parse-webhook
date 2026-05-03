@@ -37,15 +37,22 @@
 
 ## リファクタリング候補
 
-- multipart/mixed の単純構造で postal-mime 優先を拡大し、互換フォールバック適用範囲をさらに縮小する
-- multipart 異常系フォールバックの許可条件を最小化し、仕様準拠との境界を明確化する
+- multipart/mixed の単純構造で postal-mime 優先を拡大し、互換フォールバック適用範囲をさらに縮小する（部分完了）
+- multipart 異常系フォールバックの許可条件を最小化し、仕様準拠との境界を明確化する（部分完了）
+
+### 現在の実装方針
+
+- `multipart/mixed` の単純構造は 1 階層（text/plain, text/html, attachment 直下）として扱う
+- 単純構造では postal-mime を優先し、不一致時も postal-mime を正とする
+- 境界異常判定は「開始境界」「終端境界」「パート整合」の中間厳密度で扱う
+- nested multipart（mixed 内 alternative）は本文抽出維持を目標にする
 
 ### 完了済みのリファクタリング（2026-05-03）
 
 - 解析・正規化・配信の責務分割を完了し、parser/payload builder/文字コードユーティリティを再編
 - postal-mime adapter を導入して段階移行を実施し、最終的に `parseEmailStream` を postal-mime 単一路線へ統一
 - 互換維持のために導入した legacy フォールバックと依存注入引数を廃止し、legacy MIME 解析モジュールを削除
-- G3 比較基盤（30件固定コーパス、レポート生成）を整備し、比較基準をゴールデン期待値比較へ移行
-- CI の test job に G3 互換ゲート（`pnpm run g3:compare:ci`）を組み込み、デプロイ前の必須チェックとして定着
+- ベースライン比較基盤（30件固定ケース、レポート生成）を整備し、比較基準を固定期待値比較へ移行
+- CI の test job にベースライン比較ゲート（`pnpm run baseline:compare:ci`）を組み込み、デプロイ前の必須チェックとして定着
 - multipart/alternative の正常系では postal-mime 結果を優先し、異常シグナル時のみ互換フォールバックを適用する判定を導入
-- G3 ゴールデン更新運用を実装し、`g3:golden:update` と PR テンプレで更新理由・影響ケース・再検証ログを明示化
+- 期待値更新運用を実装し、`baseline:update` と PR テンプレで更新理由・影響ケース・再検証ログを明示化

@@ -37,8 +37,8 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Run G3 compare gate
-        run: pnpm run g3:compare:ci
+      - name: Run baseline compare gate
+        run: pnpm run baseline:compare:ci
 
   deploy:
     runs-on: ubuntu-latest
