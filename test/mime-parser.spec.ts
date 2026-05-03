@@ -70,4 +70,26 @@ describe('email parser', () => {
 		expect(parsed.subject).toBe('啓明館');
 		expect(parsed.subjectCharset).toBe('utf-8');
 	});
+
+	it('allows overriding body decoder via parser dependencies', async () => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'To: Receiver <receiver@example.com>',
+			'Subject: dependency injection',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Transfer-Encoding: base64',
+			'',
+			'aGVsbG8=',
+		].join('\r\n');
+
+		const stream = new Response(raw).body;
+		if (!stream) throw new Error('Failed to create stream');
+
+		const parsed = await parseEmailStream(stream, {
+			decodeBody: () => ({ text: 'decoded by custom dep', charset: 'utf-8' }),
+		});
+
+		expect(parsed.text).toBe('decoded by custom dep');
+		expect(parsed.textCharset).toBe('utf-8');
+	});
 });
