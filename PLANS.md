@@ -19,8 +19,6 @@
 
 ## テスト拡張候補
 
-- `message.rawSize` が未提供の場合にサイズ reject 判定をスキップすることを確認するテストを追加する
-- `MAX_MESSAGE_SIZE` が未設定・非数値の場合に既定値へフォールバックすることを確認するテストを追加する
 - nested multipart（`multipart/mixed` 内に `multipart/alternative`）で本文抽出が維持されることを確認するテストを追加する
 
 ### 完了済みのテスト拡張（2026-05-03）
@@ -30,6 +28,8 @@
 - Webhook が非 2xx を返す場合に reject しないテストを追加済み
 - Webhook のネットワークエラー時に reject しないテストを追加済み
 - `MAX_MESSAGE_SIZE` 超過による reject のテストを追加済み
+- `message.rawSize` が未提供の場合にサイズ reject 判定をスキップするテストを追加済み
+- `MAX_MESSAGE_SIZE` が非数値の場合に既定値へフォールバックするテストを追加済み
 - HTML のみを含むメールのテストを追加済み
 
 ## プロダクト上の確認事項

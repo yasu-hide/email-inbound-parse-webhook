@@ -279,6 +279,38 @@ describe('email worker contract', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it('does not reject by size when rawSize is unavailable', async () => {
+		const raw = buildRawEmail('no raw size');
+		const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		const msg = createMessage(raw) as any;
+		delete msg.rawSize;
+		const ctx = createExecutionContext();
+
+		await worker.email(msg, {
+			WEBHOOK_URL: 'https://example.test/webhook',
+			MAX_MESSAGE_SIZE: 1,
+		} as any, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('falls back to default max size when MAX_MESSAGE_SIZE is non-number', async () => {
+		const raw = buildRawEmail('string max size');
+		const { fetchMock, msg } = await runEmail(raw, {
+			env: {
+				WEBHOOK_URL: 'https://example.test/webhook',
+				MAX_MESSAGE_SIZE: '1',
+			},
+		});
+
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it('rejects with Parsing error when parser throws', async () => {
 		const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
 		vi.stubGlobal('fetch', fetchMock);
