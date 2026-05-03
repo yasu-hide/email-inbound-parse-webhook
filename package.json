@@ -9,13 +9,19 @@
 		"start": "wrangler dev",
 		"test": "vitest run",
 		"test:watch": "vitest",
+		"g3:compare": "tsx scripts/g3-compare.ts",
+		"g3:compare:ci": "G3_GATE=1 tsx scripts/g3-compare.ts",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.15.2",
 		"@types/node": "^25.3.2",
+		"tsx": "^4.20.6",
 		"typescript": "^5.5.2",
 		"vitest": "~4.1.5",
 		"wrangler": "^4.85.0"
+	},
+	"dependencies": {
+		"postal-mime": "^2.7.4"
 	}
 }
