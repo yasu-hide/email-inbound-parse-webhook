@@ -20,6 +20,13 @@ export function ensureWebhookConfigured(message: InboundMessage, webhookUrl?: st
 	return false;
 }
 
+export function ensureWebhookSigningConfigured(message: InboundMessage, privateKey?: string): privateKey is string {
+	if (privateKey) return true;
+	console.error('email.rejected.no_webhook_signing_key', { from: message.from, to: message.to });
+	safeSetReject(message, 'INBOUND_PARSE_WEBHOOK_PRIVATE_KEY not configured');
+	return false;
+}
+
 export function rejectIfMessageTooLarge(message: InboundMessage, maxMessageSize: number): boolean {
 	if (typeof message.rawSize === 'number' && message.rawSize > maxMessageSize) {
 		console.warn('email.rejected.too_large', { size: message.rawSize, max: maxMessageSize });
@@ -32,4 +39,9 @@ export function rejectIfMessageTooLarge(message: InboundMessage, maxMessageSize:
 export function rejectParsingError(message: InboundMessage, error: unknown) {
 	console.error('email.parse_error', { error: String(error) });
 	safeSetReject(message, 'Parsing error');
+}
+
+export function rejectWebhookSigningError(message: InboundMessage, error: unknown) {
+	console.error('email.webhook_signing_error', { error: String(error) });
+	safeSetReject(message, 'Webhook signing error');
 }

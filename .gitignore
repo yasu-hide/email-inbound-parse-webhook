@@ -164,6 +164,8 @@ dist
 !.dev.vars.example
 .env*
 !.env.example
+inbound-parse-webhook-private.pem
+inbound-parse-webhook-public.pem
 .wrangler/
 artifacts/
 bundled/

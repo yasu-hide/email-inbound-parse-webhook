@@ -1,4 +1,10 @@
-import { ensureWebhookConfigured, rejectIfMessageTooLarge, rejectParsingError } from './inbound-policy';
+import {
+	ensureWebhookConfigured,
+	ensureWebhookSigningConfigured,
+	rejectIfMessageTooLarge,
+	rejectParsingError,
+	rejectWebhookSigningError,
+} from './inbound-policy';
 import { parseEmailStream } from './email-parser';
 import { postWebhook } from './webhook-client';
 import { buildWebhookPayload, payloadToFormData } from './webhook-payload-builder';
@@ -6,6 +12,7 @@ import type { ParsedResult } from './email-parser';
 
 type WorkerEnv = Env & {
 	WEBHOOK_URL?: string;
+	INBOUND_PARSE_WEBHOOK_PRIVATE_KEY?: string;
 	MAX_MESSAGE_SIZE?: number;
 };
 
@@ -63,6 +70,7 @@ export default {
 		console.info('email.received', { from: message.from, to: message.to, rawSize: (message as any).rawSize });
 
 		if (!ensureWebhookConfigured(message, env.WEBHOOK_URL)) return;
+		if (!ensureWebhookSigningConfigured(message, env.INBOUND_PARSE_WEBHOOK_PRIVATE_KEY)) return;
 
 		const MAX = typeof env.MAX_MESSAGE_SIZE === 'number' ? env.MAX_MESSAGE_SIZE : 10 * 1024 * 1024;
 		if (rejectIfMessageTooLarge(message, MAX)) return;
@@ -88,6 +96,10 @@ export default {
 			charsets: headerCharsets,
 		});
 
-		await postWebhook(env.WEBHOOK_URL, form);
+		try {
+			await postWebhook(env.WEBHOOK_URL, form, env.INBOUND_PARSE_WEBHOOK_PRIVATE_KEY);
+		} catch (e) {
+			rejectWebhookSigningError(message, e);
+		}
 	},
 } satisfies ExportedHandler<WorkerEnv>;

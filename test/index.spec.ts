@@ -1,6 +1,11 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src';
+import {
+	WEBHOOK_SIGNATURE_HEADER,
+	WEBHOOK_TIMESTAMP_HEADER,
+	buildSignedPayload,
+} from '../src/webhook-signature';
 
 type TestMessage = {
 	from: string;
@@ -16,6 +21,93 @@ type RunEmailOptions = {
 	env?: Record<string, unknown>;
 	fetchImpl?: ReturnType<typeof vi.fn>;
 };
+
+let testPrivateKey = '';
+let testPublicKey: CryptoKey;
+
+function bytesToBase64(bytes: Uint8Array): string {
+	let binary = '';
+	for (const byte of bytes) {
+		binary += String.fromCharCode(byte);
+	}
+	return btoa(binary);
+}
+
+function arrayBufferToPem(label: string, buffer: ArrayBuffer): string {
+	const base64 = bytesToBase64(new Uint8Array(buffer));
+	const lines = base64.match(/.{1,64}/g)?.join('\n') ?? '';
+	return `-----BEGIN ${label}-----\n${lines}\n-----END ${label}-----`;
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i += 1) {
+		bytes[i] = binary.charCodeAt(i);
+	}
+	return bytes;
+}
+
+function derToP1363(der: Uint8Array): Uint8Array {
+	if (der[0] !== 0x30) throw new Error('Expected DER sequence');
+	let offset = 2;
+
+	const readInteger = () => {
+		if (der[offset++] !== 0x02) throw new Error('Expected DER integer');
+		const length = der[offset++];
+		let value = der.slice(offset, offset + length);
+		offset += length;
+		while (value.length > 1 && value[0] === 0) {
+			value = value.slice(1);
+		}
+		if (value.length > 32) throw new Error('Integer does not fit P-256');
+
+		const padded = new Uint8Array(32);
+		padded.set(value, 32 - value.length);
+		return padded;
+	};
+
+	const signature = new Uint8Array(64);
+	signature.set(readInteger(), 0);
+	signature.set(readInteger(), 32);
+	return signature;
+}
+
+async function createTestSigningKey() {
+	const pair = await crypto.subtle.generateKey(
+		{ name: 'ECDSA', namedCurve: 'P-256' },
+		true,
+		['sign', 'verify'],
+	) as CryptoKeyPair;
+	const [privateKey, publicKey] = await Promise.all([
+		crypto.subtle.exportKey('pkcs8', pair.privateKey) as Promise<ArrayBuffer>,
+		crypto.subtle.exportKey('spki', pair.publicKey) as Promise<ArrayBuffer>,
+	]);
+
+	testPrivateKey = arrayBufferToPem('PRIVATE KEY', privateKey);
+	testPublicKey = await crypto.subtle.importKey(
+		'spki',
+		publicKey,
+		{ name: 'ECDSA', namedCurve: 'P-256' },
+		false,
+		['verify'],
+	);
+}
+
+async function readWebhookRequest(fetchMock: ReturnType<typeof vi.fn>) {
+	const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+	const headers = new Headers(init.headers);
+	const body = init.body as ArrayBuffer;
+	const form = await new Response(body.slice(0), { headers }).formData();
+
+	return {
+		url,
+		init,
+		headers,
+		body,
+		form,
+	};
+}
 
 function buildRawEmail(
 	subjectHeader: string,
@@ -57,9 +149,8 @@ async function runEmailWithRaw(raw: RawEmailInput): Promise<FormData> {
 	expect(msg.setReject).not.toHaveBeenCalled();
 	expect(fetchMock).toHaveBeenCalledTimes(1);
 
-	const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-	expect(init.body).toBeInstanceOf(FormData);
-	return init.body as FormData;
+	const { form } = await readWebhookRequest(fetchMock);
+	return form;
 }
 
 async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
@@ -68,7 +159,11 @@ async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
 
 	const msg = createMessage(raw);
 	const ctx = createExecutionContext();
-	const env = (options.env ?? { WEBHOOK_URL: 'https://example.test/webhook' }) as any;
+	const env = {
+		WEBHOOK_URL: 'https://example.test/webhook',
+		INBOUND_PARSE_WEBHOOK_PRIVATE_KEY: testPrivateKey,
+		...(options.env ?? {}),
+	} as any;
 
 	await worker.email(msg as any, env, ctx);
 	await waitOnExecutionContext(ctx);
@@ -82,6 +177,10 @@ async function runFetch(request: Request): Promise<Response> {
 	await waitOnExecutionContext(ctx);
 	return response;
 }
+
+beforeAll(async () => {
+	await createTestSigningKey();
+});
 
 describe('email worker subject decoding', () => {
 	beforeEach(() => {
@@ -271,10 +370,21 @@ describe('email worker contract', () => {
 
 	it('rejects when WEBHOOK_URL is missing', async () => {
 		const raw = buildRawEmail('missing webhook');
-		const { fetchMock, msg } = await runEmail(raw, { env: {} });
+		const { fetchMock, msg } = await runEmail(raw, { env: { WEBHOOK_URL: undefined } });
 
 		expect(msg.setReject).toHaveBeenCalledTimes(1);
 		expect(msg.setReject).toHaveBeenCalledWith('WEBHOOK_URL not configured');
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects before parsing when webhook signing key is missing', async () => {
+		const raw = buildRawEmail('missing signing key');
+		const { fetchMock, msg } = await runEmail(raw, {
+			env: { INBOUND_PARSE_WEBHOOK_PRIVATE_KEY: undefined },
+		});
+
+		expect(msg.setReject).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).toHaveBeenCalledWith('INBOUND_PARSE_WEBHOOK_PRIVATE_KEY not configured');
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
@@ -317,6 +427,7 @@ describe('email worker contract', () => {
 
 		await worker.email(msg, {
 			WEBHOOK_URL: 'https://example.test/webhook',
+			INBOUND_PARSE_WEBHOOK_PRIVATE_KEY: testPrivateKey,
 			MAX_MESSAGE_SIZE: 1,
 		} as any, ctx);
 		await waitOnExecutionContext(ctx);
@@ -351,7 +462,10 @@ describe('email worker contract', () => {
 		};
 		const ctx = createExecutionContext();
 
-		await worker.email(msg as any, { WEBHOOK_URL: 'https://example.test/webhook' } as any, ctx);
+		await worker.email(msg as any, {
+			WEBHOOK_URL: 'https://example.test/webhook',
+			INBOUND_PARSE_WEBHOOK_PRIVATE_KEY: testPrivateKey,
+		} as any, ctx);
 		await waitOnExecutionContext(ctx);
 
 		expect(msg.setReject).toHaveBeenCalledTimes(1);
@@ -381,6 +495,42 @@ describe('email worker contract', () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(msg.setReject).not.toHaveBeenCalled();
+	});
+
+	it('rejects and does not fetch when webhook signing fails', async () => {
+		const raw = buildRawEmail('invalid signing key');
+		const { fetchMock, msg } = await runEmail(raw, {
+			env: { INBOUND_PARSE_WEBHOOK_PRIVATE_KEY: 'not-a-pem' },
+		});
+
+		expect(msg.setReject).toHaveBeenCalledTimes(1);
+		expect(msg.setReject).toHaveBeenCalledWith('Webhook signing error');
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('sends only X-Email signature headers over the exact serialized multipart body', async () => {
+		const raw = buildRawEmail('signed webhook');
+		const { fetchMock, msg } = await runEmail(raw);
+
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const { headers, body, form } = await readWebhookRequest(fetchMock);
+		const contentType = headers.get('content-type');
+		expect(contentType).toMatch(/^multipart\/form-data; boundary=/);
+		expect(headers.get(WEBHOOK_SIGNATURE_HEADER)).toEqual(expect.any(String));
+		expect(headers.get(WEBHOOK_TIMESTAMP_HEADER)).toMatch(/^\d+$/);
+		expect(headers.has('X-Twilio-Email-Event-Webhook-Signature')).toBe(false);
+		expect(headers.has('X-Twilio-Email-Event-Webhook-Timestamp')).toBe(false);
+		expect(form.get('subject')).toBe('signed webhook');
+
+		const signature = derToP1363(base64ToBytes(headers.get(WEBHOOK_SIGNATURE_HEADER) ?? ''));
+		await expect(crypto.subtle.verify(
+			{ name: 'ECDSA', hash: 'SHA-256' },
+			testPublicKey,
+			signature,
+			buildSignedPayload(headers.get(WEBHOOK_TIMESTAMP_HEADER) ?? '', body),
+		)).resolves.toBe(true);
 	});
 
 	it('always sends required payload fields', async () => {
