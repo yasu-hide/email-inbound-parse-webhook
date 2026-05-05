@@ -17,7 +17,8 @@
 	},
 	"secrets": {
 		"required": [
-			"WEBHOOK_URL"
+			"WEBHOOK_URL",
+			"INBOUND_PARSE_WEBHOOK_PRIVATE_KEY"
 		]
 	},
 	"observability": {
