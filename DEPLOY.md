@@ -53,9 +53,9 @@ wrangler secret put WEBHOOK_URL
 wrangler secret put INBOUND_PARSE_WEBHOOK_PRIVATE_KEY < inbound-parse-webhook-private.pem
 ```
 
-`INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` には、P-256 ECDSA の PKCS#8 PEM private key を設定します。対応する public key は Webhook 受信側の署名検証設定に使用します。
+`INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` には、ECDSA prime256v1（P-256）の PKCS#8 PEM private key を設定します。対応する public key は Webhook 受信側の署名検証設定に使用します。
 
-鍵ペアは以下のように作成できます。
+鍵ペアは ECDSA prime256v1 で作成します。
 
 ```bash
 openssl genpkey \

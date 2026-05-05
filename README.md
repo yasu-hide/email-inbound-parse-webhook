@@ -48,11 +48,11 @@ WEBHOOK_URL=https://example.com/webhook
 INBOUND_PARSE_WEBHOOK_PRIVATE_KEY=<PKCS8_P256_PRIVATE_KEY_PEM_WITH_ESCAPED_NEWLINES>
 ```
 
-`INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` には、P-256 ECDSA の PKCS#8 PEM private key を設定します。改行を `\n` としてエスケープした値も利用できます。
+`INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` には、ECDSA prime256v1（P-256）の PKCS#8 PEM private key を設定します。改行を `\n` としてエスケープした値も利用できます。
 
 対応する public key は、Webhook 受信側の署名検証設定に使用します。
 
-署名鍵は以下のように作成できます。
+署名鍵は ECDSA prime256v1 で作成します。
 
 ```bash
 openssl genpkey \

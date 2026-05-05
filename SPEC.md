@@ -40,7 +40,7 @@
 - `MAX_MESSAGE_SIZE`: 任意
 
 `MAX_MESSAGE_SIZE` が未設定、または数値でない場合、本 Worker は `10485760` バイトを使用します。
-`INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` は P-256 ECDSA の PKCS#8 PEM private key を想定します。改行を `\n` としてエスケープした値も利用できます。
+`INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` は ECDSA prime256v1（P-256）の PKCS#8 PEM private key を想定します。改行を `\n` としてエスケープした値も利用できます。
 
 ## 4. 処理フロー
 
