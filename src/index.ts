@@ -87,7 +87,7 @@ export default {
 			from: message.from,
 			to: message.to,
 		});
-		const { form, headerCharsets } = payloadToFormData(payload);
+		const headerCharsets = payload.charsets as Record<string, string>;
 
 		console.info('email.parsed', {
 			from: parsed.from ?? message.from,
@@ -97,7 +97,7 @@ export default {
 		});
 
 		try {
-			await postWebhook(env.WEBHOOK_URL, form, env.INBOUND_PARSE_WEBHOOK_PRIVATE_KEY);
+			await postWebhook(env.WEBHOOK_URL, payload, env.INBOUND_PARSE_WEBHOOK_PRIVATE_KEY);
 		} catch (e) {
 			rejectWebhookSigningError(message, e);
 		}

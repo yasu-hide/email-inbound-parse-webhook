@@ -20,7 +20,9 @@ export type WebhookPayload = {
 	subject: string;
 	cc?: string;
 	text?: string;
+	textBytes?: Uint8Array;
 	html?: string;
+	htmlBytes?: Uint8Array;
 	charsets: WebhookCharsets;
 };
 
@@ -43,11 +45,13 @@ export function buildWebhookPayload(parsed: ParsedResult, message: DeliveryMessa
 
 	if (parsed.text) {
 		payload.text = parsed.text;
+		payload.textBytes = parsed.textBytes;
 		payload.charsets.text = parsed.textCharset || '';
 	}
 
 	if (parsed.html) {
 		payload.html = parsed.html;
+		payload.htmlBytes = parsed.htmlBytes;
 		payload.charsets.html = parsed.htmlCharset || '';
 	}
 

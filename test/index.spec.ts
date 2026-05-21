@@ -109,6 +109,80 @@ async function readWebhookRequest(fetchMock: ReturnType<typeof vi.fn>) {
 	};
 }
 
+function readWebhookRequestRaw(fetchMock: ReturnType<typeof vi.fn>) {
+	const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+	const headers = new Headers(init.headers);
+	const body = init.body as ArrayBuffer;
+	return { url, init, headers, body };
+}
+
+function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
+	return indexOfBytes(haystack, needle) !== -1;
+}
+
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, fromIndex = 0): number {
+	if (needle.length === 0) return fromIndex;
+	for (let i = fromIndex; i <= haystack.length - needle.length; i += 1) {
+		let matched = true;
+		for (let j = 0; j < needle.length; j += 1) {
+			if (haystack[i + j] !== needle[j]) {
+				matched = false;
+				break;
+			}
+		}
+		if (matched) return i;
+	}
+	return -1;
+}
+
+function binaryStringToBytes(value: string): Uint8Array {
+	const bytes = new Uint8Array(value.length);
+	for (let i = 0; i < value.length; i += 1) {
+		bytes[i] = value.charCodeAt(i) & 0xff;
+	}
+	return bytes;
+}
+
+function extractMultipartFieldBytes(body: ArrayBuffer, contentType: string, name: string): Uint8Array {
+	const boundary = contentType.match(/boundary=([^;]+)/)?.[1];
+	if (!boundary) throw new Error('Missing multipart boundary');
+
+	const bodyBytes = new Uint8Array(body);
+	const boundaryBytes = new TextEncoder().encode(`--${boundary}`);
+	const nameBytes = new TextEncoder().encode(`name="${name}"`);
+	const crlfHeaderEnd = new Uint8Array([13, 10, 13, 10]);
+	const lfHeaderEnd = new Uint8Array([10, 10]);
+
+	let boundaryIndex = indexOfBytes(bodyBytes, boundaryBytes);
+	while (boundaryIndex !== -1) {
+		const sectionStart = boundaryIndex + boundaryBytes.length;
+		const nextBoundaryIndex = indexOfBytes(bodyBytes, boundaryBytes, sectionStart);
+		if (nextBoundaryIndex === -1) break;
+
+		const section = bodyBytes.slice(sectionStart, nextBoundaryIndex);
+		if (containsBytes(section, nameBytes)) {
+			let headerEnd = indexOfBytes(section, crlfHeaderEnd);
+			let separatorLength = crlfHeaderEnd.length;
+			if (headerEnd === -1) {
+				headerEnd = indexOfBytes(section, lfHeaderEnd);
+				separatorLength = lfHeaderEnd.length;
+			}
+			if (headerEnd === -1) throw new Error(`Missing multipart separator for ${name}`);
+
+			let value = section.slice(headerEnd + separatorLength);
+			if (value.length >= 2 && value[value.length - 2] === 13 && value[value.length - 1] === 10) {
+				value = value.slice(0, value.length - 2);
+			} else if (value.length >= 1 && value[value.length - 1] === 10) {
+				value = value.slice(0, value.length - 1);
+			}
+			return value;
+		}
+
+		boundaryIndex = nextBoundaryIndex;
+	}
+	throw new Error(`Missing multipart field ${name}`);
+}
+
 function buildRawEmail(
 	subjectHeader: string,
 	fromHeader = 'Sender <sender@example.com>',
@@ -288,12 +362,17 @@ describe('email worker subject decoding', () => {
 			'',
 			'日本語テキスト',
 		].join('\r\n');
-		const form = await runEmailWithRaw(raw);
-		expect(form.get('text')).toBe('日本語テキスト');
+		const { fetchMock, msg } = await runEmail(raw);
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 
-		const charsetsRaw = form.get('charsets');
-		expect(typeof charsetsRaw).toBe('string');
-		const charsets = JSON.parse(String(charsetsRaw)) as Record<string, string>;
+		const { headers, body } = readWebhookRequestRaw(fetchMock);
+		const contentType = headers.get('content-type') ?? '';
+		const textBytes = extractMultipartFieldBytes(body, contentType, 'text');
+		expect(new TextDecoder().decode(textBytes)).toBe('日本語テキスト');
+
+		const charsetsBytes = extractMultipartFieldBytes(body, contentType, 'charsets');
+		const charsets = JSON.parse(new TextDecoder().decode(charsetsBytes)) as Record<string, string>;
 		expect(charsets.from).toBe('utf-8');
 		expect(charsets.to).toBe('utf-8');
 		expect(charsets.subject).toBe('utf-8');
@@ -331,13 +410,48 @@ describe('email worker subject decoding', () => {
 			'=1B$B$3$s$K$A$O=1B(B',
 		].join('\r\n');
 
-		const form = await runEmailWithRaw(raw);
-		expect(form.get('text')).toBe('こんにちは');
+		const { fetchMock, msg } = await runEmail(raw);
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 
-		const charsetsRaw = form.get('charsets');
-		expect(typeof charsetsRaw).toBe('string');
-		const charsets = JSON.parse(String(charsetsRaw)) as Record<string, string>;
+		const { headers, body } = readWebhookRequestRaw(fetchMock);
+		const contentType = headers.get('content-type') ?? '';
+		const textBytes = extractMultipartFieldBytes(body, contentType, 'text');
+		const charsetsBytes = extractMultipartFieldBytes(body, contentType, 'charsets');
+		const charsets = JSON.parse(new TextDecoder().decode(charsetsBytes)) as Record<string, string>;
+
+		expect(textBytes).toEqual(binaryStringToBytes('\x1B$B$3$s$K$A$O\x1B(B'));
+		expect(containsBytes(new Uint8Array(body), new TextEncoder().encode('こんにちは'))).toBe(false);
 		expect(charsets.text).toBe('iso-2022-jp');
+	});
+
+	it('sends iso-8859-1 text body bytes without UTF-8 re-encoding', async () => {
+		const raw = new Uint8Array([
+			...new TextEncoder().encode([
+				'From: Sender <sender@example.com>',
+				'To: Receiver <receiver@example.com>',
+				'Subject: latin1 body',
+				'Content-Type: text/plain; charset=ISO-8859-1',
+				'Content-Transfer-Encoding: 8bit',
+				'',
+				'caf',
+			].join('\r\n')),
+			0xe9,
+		]);
+
+		const { fetchMock, msg } = await runEmail(raw);
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const { headers, body } = readWebhookRequestRaw(fetchMock);
+		const contentType = headers.get('content-type') ?? '';
+		const textBytes = extractMultipartFieldBytes(body, contentType, 'text');
+		const charsetsBytes = extractMultipartFieldBytes(body, contentType, 'charsets');
+		const charsets = JSON.parse(new TextDecoder().decode(charsetsBytes)) as Record<string, string>;
+
+		expect(textBytes).toEqual(new Uint8Array([0x63, 0x61, 0x66, 0xe9]));
+		expect(containsBytes(textBytes, new Uint8Array([0xc3, 0xa9]))).toBe(false);
+		expect(charsets.text).toBe('iso-8859-1');
 	});
 
 	it('decodes non-utf8 raw subject header bytes and normalizes charset to utf-8', async () => {
