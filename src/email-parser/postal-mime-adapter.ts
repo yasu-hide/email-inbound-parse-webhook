@@ -44,6 +44,25 @@ function stripSingleTrailingNewline(value: string): string {
 	return value.replace(/\r?\n$/, '');
 }
 
+function stripSingleTrailingNewlineBytes(bytes: Uint8Array): Uint8Array {
+	if (bytes.length >= 2 && bytes[bytes.length - 2] === 13 && bytes[bytes.length - 1] === 10) {
+		return bytes.slice(0, bytes.length - 2);
+	}
+	if (bytes.length >= 1 && bytes[bytes.length - 1] === 10) {
+		return bytes.slice(0, bytes.length - 1);
+	}
+	return bytes;
+}
+
+function appendDecodedBytes(current: Uint8Array | undefined, next: Uint8Array): Uint8Array {
+	if (!current) return next;
+	const out = new Uint8Array(current.length + 1 + next.length);
+	out.set(current, 0);
+	out[current.length] = 10;
+	out.set(next, current.length + 1);
+	return out;
+}
+
 function findHeaderSection(bytes: Uint8Array): { headerEnd: number; separatorLength: number } {
 	for (let i = 0; i < bytes.length - 3; i++) {
 		if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) {
@@ -73,7 +92,13 @@ function extractRawBody(raw: ArrayBuffer): string {
 	return new TextDecoder('iso-8859-1').decode(bytes.slice(headerEnd + separatorLength));
 }
 
-type MultipartCompatResult = Pick<ParsedResult, 'text' | 'textCharset' | 'html' | 'htmlCharset'>;
+function extractRawBodyBytes(raw: ArrayBuffer): Uint8Array {
+	const bytes = new Uint8Array(raw);
+	const { headerEnd, separatorLength } = findHeaderSection(bytes);
+	return bytes.slice(headerEnd + separatorLength);
+}
+
+type MultipartCompatResult = Pick<ParsedResult, 'text' | 'textCharset' | 'textBytes' | 'html' | 'htmlCharset' | 'htmlBytes'>;
 
 function extractMultipartBoundary(contentType: string): string | null {
 	const match = contentType.match(/boundary="?([^";]+)"?/i);
@@ -146,10 +171,12 @@ function parseMultipartCompat(rawBody: string, contentTypeHeader: string): Multi
 			const decoded = decodeBody(raw, contentTransferEncoding, parseCharset(partContentType));
 			if (isText) {
 				result.textCharset = decoded.charset;
+				result.textBytes = appendDecodedBytes(result.textBytes, decoded.bytes);
 				result.text = result.text ? `${result.text}\n${decoded.text}` : decoded.text;
 			}
 			if (isHtml) {
 				result.htmlCharset = decoded.charset;
+				result.htmlBytes = appendDecodedBytes(result.htmlBytes, decoded.bytes);
 				result.html = result.html ? `${result.html}\n${decoded.text}` : decoded.text;
 			}
 		}
@@ -421,6 +448,7 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	const contentType = (rawHeaders['content-type'] || '').toLowerCase();
 	const contentTransferEncoding = (rawHeaders['content-transfer-encoding'] || '').toLowerCase();
 	const rawBody = extractRawBody(raw);
+	const rawBodyBytes = extractRawBodyBytes(raw);
 
 	const fallbackDecision = shouldUseMultipartCompat(contentType, rawHeaders['content-type'] || '', rawBody, parsed);
 	if (fallbackDecision.shouldFallback) {
@@ -428,40 +456,56 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 		if (compatBody.text) {
 			result.text = stripSingleTrailingNewline(compatBody.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
+			if (compatBody.textBytes) {
+				result.textBytes = stripSingleTrailingNewlineBytes(compatBody.textBytes);
+			}
 		}
 		if (compatBody.html) {
 			result.html = stripSingleTrailingNewline(compatBody.html);
 			result.htmlCharset = normalizeCharset(compatBody.htmlCharset) ?? declaredCharset;
+			if (compatBody.htmlBytes) {
+				result.htmlBytes = stripSingleTrailingNewlineBytes(compatBody.htmlBytes);
+			}
 		}
 		return result;
 	}
 
 	if (contentType.includes('multipart/')) {
+		const compatBody = parseMultipartCompat(rawBody, rawHeaders['content-type'] || '');
 		if (parsed.text) {
 			result.text = stripSingleTrailingNewline(parsed.text);
-			result.textCharset = declaredCharset;
+			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
+			if (compatBody.textBytes) {
+				result.textBytes = stripSingleTrailingNewlineBytes(compatBody.textBytes);
+			}
 		}
 		if (parsed.html) {
 			result.html = stripSingleTrailingNewline(parsed.html);
-			result.htmlCharset = declaredCharset;
+			result.htmlCharset = normalizeCharset(compatBody.htmlCharset) ?? declaredCharset;
+			if (compatBody.htmlBytes) {
+				result.htmlBytes = stripSingleTrailingNewlineBytes(compatBody.htmlBytes);
+			}
 		}
 		return result;
 	}
 
 	if (parsed.text) {
+		const decoded = decodeBody(rawBodyBytes, contentTransferEncoding, declaredCharset);
 		const normalizedText = stripSingleTrailingNewline(parsed.text);
 		if (normalizedText.includes('\uFFFD')) {
-			const fallback = decodeBody(rawBody, contentTransferEncoding, declaredCharset);
-			result.text = stripSingleTrailingNewline(fallback.text);
-			result.textCharset = normalizeCharset(fallback.charset) ?? declaredCharset;
+			result.text = stripSingleTrailingNewline(decoded.text);
+			result.textCharset = normalizeCharset(decoded.charset) ?? declaredCharset;
 		} else {
 			result.text = normalizedText;
 			result.textCharset = declaredCharset;
 		}
+		result.textBytes = stripSingleTrailingNewlineBytes(decoded.bytes);
 	}
 	if (parsed.html) {
 		result.html = stripSingleTrailingNewline(parsed.html);
 		result.htmlCharset = declaredCharset;
+		const decoded = decodeBody(rawBodyBytes, contentTransferEncoding, declaredCharset);
+		result.htmlBytes = stripSingleTrailingNewlineBytes(decoded.bytes);
 	}
 
 	return result;

@@ -11,11 +11,14 @@ export type ParsedResult = {
 	subjectCharset?: string;
 	text?: string;
 	textCharset?: string;
+	textBytes?: Uint8Array;
 	html?: string;
 	htmlCharset?: string;
+	htmlBytes?: Uint8Array;
 };
 
 export type DecodedBody = {
 	text: string;
 	charset?: string;
+	bytes: Uint8Array;
 };

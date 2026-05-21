@@ -84,8 +84,8 @@ describe('postal-mime adapter', () => {
 		const parsed = await parseRaw(raw);
 		expect(parsed.text).toContain('plain healthy body');
 		expect(parsed.html).toContain('<p>html healthy body</p>');
-		expect(parsed.textCharset).toBe('iso-2022-jp');
-		expect(parsed.htmlCharset).toBe('iso-2022-jp');
+		expect(parsed.textCharset).toBe('windows-31j');
+		expect(parsed.htmlCharset).toBe('utf-8');
 	});
 
 	it('keeps compatibility fallback for malformed multipart/alternative', async () => {
@@ -140,8 +140,8 @@ describe('postal-mime adapter', () => {
 		const parsed = await parseRaw(raw);
 		expect(parsed.text).toContain('plain mixed body');
 		expect(parsed.html).toContain('<p>html mixed body</p>');
-		expect(parsed.textCharset).toBe('iso-2022-jp');
-		expect(parsed.htmlCharset).toBe('iso-2022-jp');
+		expect(parsed.textCharset).toBe('windows-31j');
+		expect(parsed.htmlCharset).toBe('utf-8');
 	});
 
 	it('keeps compatibility fallback for malformed multipart/mixed', async () => {
