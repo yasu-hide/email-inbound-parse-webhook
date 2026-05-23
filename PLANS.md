@@ -28,6 +28,7 @@
 - `MAX_MESSAGE_SIZE` 関連（超過、rawSize 未提供、非数値時フォールバック）の判定を確認するテストを追加済み
 - HTML-only メールの抽出を確認するテストを追加済み
 - nested multipart（`multipart/mixed` 内に `multipart/alternative`）で本文抽出が維持されることを確認するテストを追加済み
+- SendGrid 互換の本文 charset 送信（`text` / `html` フォームパート名、非 UTF-8 本文バイト列、未定義 bytes 項目の非送信）を確認するテストを追加済み
 
 ## プロダクト上の確認事項
 

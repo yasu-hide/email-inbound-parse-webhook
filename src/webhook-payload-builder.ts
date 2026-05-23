@@ -1,4 +1,4 @@
-import type { ParsedResult } from './email-parser';
+import { parsedBodyBytesSymbol, type BodyBytes, type ParsedResult } from './email-parser/types';
 
 type DeliveryMessage = {
 	from?: string;
@@ -20,11 +20,14 @@ export type WebhookPayload = {
 	subject: string;
 	cc?: string;
 	text?: string;
-	textBytes?: Uint8Array;
 	html?: string;
-	htmlBytes?: Uint8Array;
 	charsets: WebhookCharsets;
+	[parsedBodyBytesSymbol]?: BodyBytes;
 };
+
+export function getWebhookBodyBytes(payload: WebhookPayload): BodyBytes | undefined {
+	return payload[parsedBodyBytesSymbol];
+}
 
 export function buildWebhookPayload(parsed: ParsedResult, message: DeliveryMessage): WebhookPayload {
 	const payload: WebhookPayload = {
@@ -45,14 +48,21 @@ export function buildWebhookPayload(parsed: ParsedResult, message: DeliveryMessa
 
 	if (parsed.text) {
 		payload.text = parsed.text;
-		payload.textBytes = parsed.textBytes;
 		payload.charsets.text = parsed.textCharset || '';
 	}
 
 	if (parsed.html) {
 		payload.html = parsed.html;
-		payload.htmlBytes = parsed.htmlBytes;
 		payload.charsets.html = parsed.htmlCharset || '';
+	}
+
+	const bodyBytes = parsed[parsedBodyBytesSymbol];
+	if (bodyBytes) {
+		Object.defineProperty(payload, parsedBodyBytesSymbol, {
+			value: bodyBytes,
+			enumerable: false,
+			configurable: true,
+		});
 	}
 
 	return payload;
