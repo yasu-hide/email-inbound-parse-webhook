@@ -1,5 +1,5 @@
 import { createWebhookSignatureHeaders } from './webhook-signature';
-import type { WebhookPayload } from './webhook-payload-builder';
+import { getWebhookBodyBytes, type WebhookPayload } from './webhook-payload-builder';
 
 type SerializedMultipart = {
 	body: ArrayBuffer;
@@ -25,11 +25,10 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return out;
 }
 
-function appendPart(parts: Uint8Array[], boundary: string, name: string, value: Uint8Array, charset = 'utf-8') {
+function appendPart(parts: Uint8Array[], boundary: string, name: string, value: Uint8Array) {
 	parts.push(textEncoder.encode(
 		`--${boundary}\r\n`
-		+ `Content-Disposition: form-data; name="${name}"\r\n`
-		+ `Content-Type: text/plain; charset=${charset}\r\n\r\n`,
+		+ `Content-Disposition: form-data; name="${name}"\r\n\r\n`,
 	));
 	parts.push(value);
 	parts.push(textEncoder.encode('\r\n'));
@@ -43,7 +42,7 @@ function bodyFieldBytes(payload: WebhookPayload, field: 'text' | 'html'): Uint8A
 	const value = payload[field];
 	if (!value) return undefined;
 
-	const bytes = field === 'text' ? payload.textBytes : payload.htmlBytes;
+	const bytes = getWebhookBodyBytes(payload)?.[field];
 	if (bytes) return bytes;
 
 	const charset = payload.charsets[field];
@@ -66,12 +65,12 @@ export function serializeWebhookMultipart(payload: WebhookPayload): SerializedMu
 
 	const textBytes = bodyFieldBytes(payload, 'text');
 	if (textBytes) {
-		appendPart(parts, boundary, 'text', textBytes, payload.charsets.text || 'utf-8');
+		appendPart(parts, boundary, 'text', textBytes);
 	}
 
 	const htmlBytes = bodyFieldBytes(payload, 'html');
 	if (htmlBytes) {
-		appendPart(parts, boundary, 'html', htmlBytes, payload.charsets.html || 'utf-8');
+		appendPart(parts, boundary, 'html', htmlBytes);
 	}
 
 	appendPart(parts, boundary, 'charsets', textEncoder.encode(JSON.stringify(payload.charsets)));

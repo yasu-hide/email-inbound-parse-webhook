@@ -33,6 +33,8 @@
 - `from` / `to` / `subject` の charset は `utf-8` として扱われる。
 - `text` / `html` の charset は解析結果の実値を保持する。
 - `headerCharsets` と `formData` 内 `charsets` の整合が取れている。
+- 非 UTF-8 の `text` / `html` は同名フォームパートのまま元文字コードバイト列で送信される。
+- `textBytes` / `htmlBytes` のような SendGrid 未定義フォーム項目が送信されない。
 
 ## 4. 優先順位
 
@@ -49,6 +51,7 @@
 
 - ドメイン層: `buildWebhookPayload` は payload 生成に責務を限定する。
 - 変換層: `payloadToFormData` は transport 変換に責務を限定する。
+- 送信層: raw multipart body は通常フォーム項目に不要な `Content-Type: text/plain; charset=...` を付けない。
 - 互換ラッパー: `buildWebhookFormData` は後方互換のために残し、2段構成の結果と同値である。
 
 ## 6. エンドポイント検証

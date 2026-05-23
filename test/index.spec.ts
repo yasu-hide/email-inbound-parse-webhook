@@ -183,6 +183,46 @@ function extractMultipartFieldBytes(body: ArrayBuffer, contentType: string, name
 	throw new Error(`Missing multipart field ${name}`);
 }
 
+function extractMultipartFieldHeaders(body: ArrayBuffer, contentType: string, name: string): string {
+	const boundary = contentType.match(/boundary=([^;]+)/)?.[1];
+	if (!boundary) throw new Error('Missing multipart boundary');
+
+	const bodyBytes = new Uint8Array(body);
+	const boundaryBytes = new TextEncoder().encode(`--${boundary}`);
+	const nameBytes = new TextEncoder().encode(`name="${name}"`);
+	const crlfHeaderEnd = new Uint8Array([13, 10, 13, 10]);
+	const lfHeaderEnd = new Uint8Array([10, 10]);
+
+	let boundaryIndex = indexOfBytes(bodyBytes, boundaryBytes);
+	while (boundaryIndex !== -1) {
+		const sectionStart = boundaryIndex + boundaryBytes.length;
+		const nextBoundaryIndex = indexOfBytes(bodyBytes, boundaryBytes, sectionStart);
+		if (nextBoundaryIndex === -1) break;
+
+		const section = bodyBytes.slice(sectionStart, nextBoundaryIndex);
+		if (containsBytes(section, nameBytes)) {
+			let headerEnd = indexOfBytes(section, crlfHeaderEnd);
+			if (headerEnd === -1) {
+				headerEnd = indexOfBytes(section, lfHeaderEnd);
+			}
+			if (headerEnd === -1) throw new Error(`Missing multipart separator for ${name}`);
+			return new TextDecoder().decode(section.slice(0, headerEnd));
+		}
+
+		boundaryIndex = nextBoundaryIndex;
+	}
+	throw new Error(`Missing multipart field ${name}`);
+}
+
+function hasMultipartField(body: ArrayBuffer, contentType: string, name: string): boolean {
+	try {
+		extractMultipartFieldHeaders(body, contentType, name);
+		return true;
+	} catch (_error) {
+		return false;
+	}
+}
+
 function buildRawEmail(
 	subjectHeader: string,
 	fromHeader = 'Sender <sender@example.com>',
@@ -417,11 +457,15 @@ describe('email worker subject decoding', () => {
 		const { headers, body } = readWebhookRequestRaw(fetchMock);
 		const contentType = headers.get('content-type') ?? '';
 		const textBytes = extractMultipartFieldBytes(body, contentType, 'text');
+		const textHeaders = extractMultipartFieldHeaders(body, contentType, 'text');
 		const charsetsBytes = extractMultipartFieldBytes(body, contentType, 'charsets');
 		const charsets = JSON.parse(new TextDecoder().decode(charsetsBytes)) as Record<string, string>;
 
 		expect(textBytes).toEqual(binaryStringToBytes('\x1B$B$3$s$K$A$O\x1B(B'));
 		expect(containsBytes(new Uint8Array(body), new TextEncoder().encode('こんにちは'))).toBe(false);
+		expect(textHeaders).not.toMatch(/^Content-Type:/im);
+		expect(hasMultipartField(body, contentType, 'textBytes')).toBe(false);
+		expect(hasMultipartField(body, contentType, 'htmlBytes')).toBe(false);
 		expect(charsets.text).toBe('iso-2022-jp');
 	});
 
@@ -446,12 +490,52 @@ describe('email worker subject decoding', () => {
 		const { headers, body } = readWebhookRequestRaw(fetchMock);
 		const contentType = headers.get('content-type') ?? '';
 		const textBytes = extractMultipartFieldBytes(body, contentType, 'text');
+		const textHeaders = extractMultipartFieldHeaders(body, contentType, 'text');
 		const charsetsBytes = extractMultipartFieldBytes(body, contentType, 'charsets');
 		const charsets = JSON.parse(new TextDecoder().decode(charsetsBytes)) as Record<string, string>;
 
 		expect(textBytes).toEqual(new Uint8Array([0x63, 0x61, 0x66, 0xe9]));
 		expect(containsBytes(textBytes, new Uint8Array([0xc3, 0xa9]))).toBe(false);
+		expect(textHeaders).not.toMatch(/^Content-Type:/im);
+		expect(hasMultipartField(body, contentType, 'textBytes')).toBe(false);
 		expect(charsets.text).toBe('iso-8859-1');
+	});
+
+	it('sends iso-8859-1 html body bytes in the html field', async () => {
+		const raw = new Uint8Array([
+			...new TextEncoder().encode([
+				'From: Sender <sender@example.com>',
+				'To: Receiver <receiver@example.com>',
+				'Subject: latin1 html body',
+				'Content-Type: text/html; charset=ISO-8859-1',
+				'Content-Transfer-Encoding: 8bit',
+				'',
+				'<p>caf',
+			].join('\r\n')),
+			0xe9,
+			...new TextEncoder().encode('</p>'),
+		]);
+
+		const { fetchMock, msg } = await runEmail(raw);
+		expect(msg.setReject).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const { headers, body } = readWebhookRequestRaw(fetchMock);
+		const contentType = headers.get('content-type') ?? '';
+		const htmlBytes = extractMultipartFieldBytes(body, contentType, 'html');
+		const htmlHeaders = extractMultipartFieldHeaders(body, contentType, 'html');
+		const charsetsBytes = extractMultipartFieldBytes(body, contentType, 'charsets');
+		const charsets = JSON.parse(new TextDecoder().decode(charsetsBytes)) as Record<string, string>;
+
+		expect(htmlBytes).toEqual(new Uint8Array([
+			...new TextEncoder().encode('<p>caf'),
+			0xe9,
+			...new TextEncoder().encode('</p>'),
+		]));
+		expect(containsBytes(htmlBytes, new Uint8Array([0xc3, 0xa9]))).toBe(false);
+		expect(htmlHeaders).not.toMatch(/^Content-Type:/im);
+		expect(hasMultipartField(body, contentType, 'htmlBytes')).toBe(false);
+		expect(charsets.html).toBe('iso-8859-1');
 	});
 
 	it('decodes non-utf8 raw subject header bytes and normalizes charset to utf-8', async () => {
@@ -632,6 +716,7 @@ describe('email worker contract', () => {
 		const { headers, body, form } = await readWebhookRequest(fetchMock);
 		const contentType = headers.get('content-type');
 		expect(contentType).toMatch(/^multipart\/form-data; boundary=/);
+		expect(extractMultipartFieldHeaders(body, contentType ?? '', 'subject')).not.toMatch(/^Content-Type:/im);
 		expect(headers.get(WEBHOOK_SIGNATURE_HEADER)).toEqual(expect.any(String));
 		expect(headers.get(WEBHOOK_TIMESTAMP_HEADER)).toMatch(/^\d+$/);
 		expect(headers.has('X-Twilio-Email-Event-Webhook-Signature')).toBe(false);
@@ -750,6 +835,8 @@ describe('fetch payload preview endpoint', () => {
 		expect(json.payload.to).toBe('Parsed Receiver <receiver@example.com>');
 		expect(json.payload.subject).toBe('preview subject');
 		expect(json.payload.text).toBe('preview body');
+		expect(json.payload.textBytes).toBeUndefined();
+		expect(json.payload.htmlBytes).toBeUndefined();
 		expect(json.headerCharsets).toEqual({
 			from: 'utf-8',
 			to: 'utf-8',
@@ -760,6 +847,8 @@ describe('fetch payload preview endpoint', () => {
 		expect(json.formFields.to).toBe('Parsed Receiver <receiver@example.com>');
 		expect(json.formFields.subject).toBe('preview subject');
 		expect(json.formFields.text).toBe('preview body');
+		expect(json.formFields.textBytes).toBeUndefined();
+		expect(json.formFields.htmlBytes).toBeUndefined();
 	});
 
 	it('returns 400 when payload preview body is invalid json', async () => {

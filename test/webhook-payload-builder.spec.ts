@@ -83,6 +83,15 @@ describe('webhook-payload-builder', () => {
 		expect(body.cc).toBe('cc@example.com');
 		expect(body.text).toBe('plain body');
 		expect(body.html).toBe('<p>html</p>');
+		expect(Object.keys(payload).sort()).toEqual([
+			'cc',
+			'charsets',
+			'from',
+			'html',
+			'subject',
+			'text',
+			'to',
+		]);
 		expect(headerCharsets).toEqual({
 			from: 'utf-8',
 			to: 'utf-8',

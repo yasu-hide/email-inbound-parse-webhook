@@ -1,3 +1,10 @@
+export const parsedBodyBytesSymbol: unique symbol = Symbol('parsedBodyBytes');
+
+export type BodyBytes = {
+	text?: Uint8Array;
+	html?: Uint8Array;
+};
+
 export type ParsedResult = {
 	headers: Record<string, string>;
 	rawHeaders?: Record<string, string>;
@@ -11,10 +18,9 @@ export type ParsedResult = {
 	subjectCharset?: string;
 	text?: string;
 	textCharset?: string;
-	textBytes?: Uint8Array;
 	html?: string;
 	htmlCharset?: string;
-	htmlBytes?: Uint8Array;
+	[parsedBodyBytesSymbol]?: BodyBytes;
 };
 
 export type DecodedBody = {

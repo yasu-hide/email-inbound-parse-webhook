@@ -3,7 +3,7 @@ import { parseCharset } from '../email-normalizer';
 import { normalizeCharset } from '../email-normalizer-utils';
 import { decodeBody } from './body-decoder';
 import { decodeHeaderMap, parseRawHeaderMap } from './header-map';
-import type { ParsedResult } from '../email-parser';
+import { parsedBodyBytesSymbol, type BodyBytes, type ParsedResult } from './types';
 
 function formatMailbox(mailbox: Mailbox): string {
 	if (mailbox.name && mailbox.address) {
@@ -63,6 +63,25 @@ function appendDecodedBytes(current: Uint8Array | undefined, next: Uint8Array): 
 	return out;
 }
 
+function setParsedBodyBytes(result: ParsedResult, field: 'text' | 'html', bytes: Uint8Array): void {
+	const bodyBytes = {
+		...(result[parsedBodyBytesSymbol] ?? {}),
+		[field]: bytes,
+	};
+	Object.defineProperty(result, parsedBodyBytesSymbol, {
+		value: bodyBytes,
+		enumerable: false,
+		configurable: true,
+	});
+}
+
+function setCompatBodyBytes(result: MultipartCompatResult, field: 'text' | 'html', bytes: Uint8Array): void {
+	result.bodyBytes = {
+		...(result.bodyBytes ?? {}),
+		[field]: bytes,
+	};
+}
+
 function findHeaderSection(bytes: Uint8Array): { headerEnd: number; separatorLength: number } {
 	for (let i = 0; i < bytes.length - 3; i++) {
 		if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) {
@@ -98,7 +117,9 @@ function extractRawBodyBytes(raw: ArrayBuffer): Uint8Array {
 	return bytes.slice(headerEnd + separatorLength);
 }
 
-type MultipartCompatResult = Pick<ParsedResult, 'text' | 'textCharset' | 'textBytes' | 'html' | 'htmlCharset' | 'htmlBytes'>;
+type MultipartCompatResult = Pick<ParsedResult, 'text' | 'textCharset' | 'html' | 'htmlCharset'> & {
+	bodyBytes?: BodyBytes;
+};
 
 function extractMultipartBoundary(contentType: string): string | null {
 	const match = contentType.match(/boundary="?([^";]+)"?/i);
@@ -171,12 +192,12 @@ function parseMultipartCompat(rawBody: string, contentTypeHeader: string): Multi
 			const decoded = decodeBody(raw, contentTransferEncoding, parseCharset(partContentType));
 			if (isText) {
 				result.textCharset = decoded.charset;
-				result.textBytes = appendDecodedBytes(result.textBytes, decoded.bytes);
+				setCompatBodyBytes(result, 'text', appendDecodedBytes(result.bodyBytes?.text, decoded.bytes));
 				result.text = result.text ? `${result.text}\n${decoded.text}` : decoded.text;
 			}
 			if (isHtml) {
 				result.htmlCharset = decoded.charset;
-				result.htmlBytes = appendDecodedBytes(result.htmlBytes, decoded.bytes);
+				setCompatBodyBytes(result, 'html', appendDecodedBytes(result.bodyBytes?.html, decoded.bytes));
 				result.html = result.html ? `${result.html}\n${decoded.text}` : decoded.text;
 			}
 		}
@@ -456,15 +477,15 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 		if (compatBody.text) {
 			result.text = stripSingleTrailingNewline(compatBody.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
-			if (compatBody.textBytes) {
-				result.textBytes = stripSingleTrailingNewlineBytes(compatBody.textBytes);
+			if (compatBody.bodyBytes?.text) {
+				setParsedBodyBytes(result, 'text', stripSingleTrailingNewlineBytes(compatBody.bodyBytes.text));
 			}
 		}
 		if (compatBody.html) {
 			result.html = stripSingleTrailingNewline(compatBody.html);
 			result.htmlCharset = normalizeCharset(compatBody.htmlCharset) ?? declaredCharset;
-			if (compatBody.htmlBytes) {
-				result.htmlBytes = stripSingleTrailingNewlineBytes(compatBody.htmlBytes);
+			if (compatBody.bodyBytes?.html) {
+				setParsedBodyBytes(result, 'html', stripSingleTrailingNewlineBytes(compatBody.bodyBytes.html));
 			}
 		}
 		return result;
@@ -475,15 +496,15 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 		if (parsed.text) {
 			result.text = stripSingleTrailingNewline(parsed.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
-			if (compatBody.textBytes) {
-				result.textBytes = stripSingleTrailingNewlineBytes(compatBody.textBytes);
+			if (compatBody.bodyBytes?.text) {
+				setParsedBodyBytes(result, 'text', stripSingleTrailingNewlineBytes(compatBody.bodyBytes.text));
 			}
 		}
 		if (parsed.html) {
 			result.html = stripSingleTrailingNewline(parsed.html);
 			result.htmlCharset = normalizeCharset(compatBody.htmlCharset) ?? declaredCharset;
-			if (compatBody.htmlBytes) {
-				result.htmlBytes = stripSingleTrailingNewlineBytes(compatBody.htmlBytes);
+			if (compatBody.bodyBytes?.html) {
+				setParsedBodyBytes(result, 'html', stripSingleTrailingNewlineBytes(compatBody.bodyBytes.html));
 			}
 		}
 		return result;
@@ -499,13 +520,13 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 			result.text = normalizedText;
 			result.textCharset = declaredCharset;
 		}
-		result.textBytes = stripSingleTrailingNewlineBytes(decoded.bytes);
+		setParsedBodyBytes(result, 'text', stripSingleTrailingNewlineBytes(decoded.bytes));
 	}
 	if (parsed.html) {
 		result.html = stripSingleTrailingNewline(parsed.html);
 		result.htmlCharset = declaredCharset;
 		const decoded = decodeBody(rawBodyBytes, contentTransferEncoding, declaredCharset);
-		result.htmlBytes = stripSingleTrailingNewlineBytes(decoded.bytes);
+		setParsedBodyBytes(result, 'html', stripSingleTrailingNewlineBytes(decoded.bytes));
 	}
 
 	return result;

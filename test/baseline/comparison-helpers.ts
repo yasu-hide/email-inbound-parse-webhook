@@ -118,7 +118,7 @@ function compareHeaderField(
 }
 
 function comparePayloads(diffs: DiffItem[], legacy: WebhookPayload, current: WebhookPayload): void {
-	const requiredKeys: Array<keyof WebhookPayload> = ['from', 'to', 'subject'];
+	const requiredKeys: Array<Extract<keyof WebhookPayload, string>> = ['from', 'to', 'subject'];
 	for (const key of requiredKeys) {
 		if (legacy[key] && !current[key]) {
 			diffs.push({
