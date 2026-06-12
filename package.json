@@ -12,7 +12,11 @@
 		"baseline:compare": "tsx scripts/baseline-compare.ts",
 		"baseline:compare:ci": "BASELINE_GATE=1 tsx scripts/baseline-compare.ts",
 		"baseline:update": "tsx scripts/baseline-update.ts",
-		"cf-typegen": "wrangler types"
+		"cf-typegen": "wrangler types",
+		"qdrant:diff-targets": "tsx scripts/qdrant-diff-targets.ts",
+		"qdrant:store-batch": "tsx scripts/qdrant-store-batch.ts",
+		"qdrant:two-hop-validate": "tsx scripts/qdrant-two-hop-validate.ts",
+		"qdrant:refresh": "pnpm run qdrant:diff-targets && pnpm run qdrant:store-batch"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.15.2",

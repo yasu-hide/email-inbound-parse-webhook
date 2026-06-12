@@ -2,6 +2,18 @@
 
 STOP. Your knowledge of Cloudflare Workers APIs and limits may be outdated. Always retrieve current documentation before any Workers, KV, R2, D1, Durable Objects, Queues, Vectorize, AI, or Agents SDK task.
 
+## Repo Search
+
+When investigating this repository, prefer Qdrant MCP search before workspace full-text search.
+
+Start with `qdrant-find` using the templates in `docs/QDRANT_QUERY_TEMPLATES.md`.
+
+Use two-step retrieval when possible: first by feature intent, then by `links` tokens such as `belongs_to`, `tested_by`, `related_doc`, and `imports`.
+
+Use workspace full-text search only for exact symbol checks, line-level verification, or when Qdrant is unavailable, stale, or returns weak results.
+
+If recent changes may not be indexed yet, refer to `docs/QDRANT_QUERY_TEMPLATES.md` for refresh and validation workflow before relying on retrieval.
+
 ## Docs
 
 - https://developers.cloudflare.com/workers/
