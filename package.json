@@ -8,6 +8,7 @@
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest run",
+		"coverage": "vitest run --coverage",
 		"test:watch": "vitest",
 		"baseline:compare": "tsx scripts/baseline-compare.ts",
 		"baseline:compare:ci": "BASELINE_GATE=1 tsx scripts/baseline-compare.ts",
@@ -21,6 +22,7 @@
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.15.2",
 		"@types/node": "^25.3.2",
+		"@vitest/coverage-istanbul": "~4.1.5",
 		"tsx": "^4.20.6",
 		"typescript": "^5.5.2",
 		"vitest": "~4.1.5",
