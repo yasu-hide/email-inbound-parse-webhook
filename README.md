@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/github/yasu-hide/email-inbound-parse-webhook/graph/badge.svg?token=IIOKN284E5)](https://codecov.io/github/yasu-hide/email-inbound-parse-webhook)
+
 # email-inbound-parse-webhook
 
 本プロジェクトは、受信メールを解析し、正規化した項目を外部 Webhook へ転送する Cloudflare Email Worker です。
