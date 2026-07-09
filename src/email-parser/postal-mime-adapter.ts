@@ -117,6 +117,38 @@ function extractRawBodyBytes(raw: ArrayBuffer): Uint8Array {
 	return bytes.slice(headerEnd + separatorLength);
 }
 
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, fromIndex = 0): number {
+	for (let i = fromIndex; i <= haystack.length - needle.length; i++) {
+		let matched = true;
+		for (let j = 0; j < needle.length; j++) {
+			if (haystack[i + j] !== needle[j]) {
+				matched = false;
+				break;
+			}
+		}
+		if (matched) return i;
+	}
+	return -1;
+}
+
+function bytesStartsWith(bytes: Uint8Array, prefix: Uint8Array): boolean {
+	if (bytes.length < prefix.length) return false;
+	for (let i = 0; i < prefix.length; i++) {
+		if (bytes[i] !== prefix[i]) return false;
+	}
+	return true;
+}
+
+function stripLeadingNewlineBytes(bytes: Uint8Array): Uint8Array {
+	if (bytes.length >= 2 && bytes[0] === 13 && bytes[1] === 10) {
+		return bytes.slice(2);
+	}
+	if (bytes.length >= 1 && bytes[0] === 10) {
+		return bytes.slice(1);
+	}
+	return bytes;
+}
+
 type MultipartCompatResult = Pick<ParsedResult, 'text' | 'textCharset' | 'html' | 'htmlCharset'> & {
 	bodyBytes?: BodyBytes;
 };
@@ -138,31 +170,40 @@ function parsePartHeaders(rawHeaders: string): Record<string, string> {
 	return headers;
 }
 
-function parseMultipartCompat(rawBody: string, contentTypeHeader: string): MultipartCompatResult {
+function parseMultipartCompat(rawBody: Uint8Array, contentTypeHeader: string): MultipartCompatResult {
 	const boundary = extractMultipartBoundary(contentTypeHeader);
 	if (!boundary) return {};
 
+	const encoder = new TextEncoder();
+	const boundaryBytes = encoder.encode(boundary);
+	const headerSeparatorCrlf = encoder.encode('\r\n\r\n');
+	const headerSeparatorLf = encoder.encode('\n\n');
+	const partBoundaryCrlf = encoder.encode(`\r\n${boundary}`);
+	const partBoundaryLf = encoder.encode(`\n${boundary}`);
+	const dashDash = encoder.encode('--');
+
 	let buffer = rawBody;
 	const result: MultipartCompatResult = {};
-	const startIdx = buffer.indexOf(boundary);
+	const startIdx = indexOfBytes(buffer, boundaryBytes);
 	if (startIdx !== -1) {
-		buffer = buffer.slice(startIdx + boundary.length);
+		buffer = buffer.slice(startIdx + boundaryBytes.length);
 	}
 
 	while (buffer.length > 0) {
-		let separator = '\r\n\r\n';
-		let separatorIndex = buffer.indexOf(separator);
+		let separator = headerSeparatorCrlf;
+		let separatorIndex = indexOfBytes(buffer, separator);
 		if (separatorIndex === -1) {
-			separator = '\n\n';
-			separatorIndex = buffer.indexOf(separator);
+			separator = headerSeparatorLf;
+			separatorIndex = indexOfBytes(buffer, separator);
 		}
 		if (separatorIndex === -1) {
 			break;
 		}
 
-		const partRawHeaders = buffer.slice(0, separatorIndex);
+		const partRawHeaderBytes = buffer.slice(0, separatorIndex);
 		buffer = buffer.slice(separatorIndex + separator.length);
 
+		const partRawHeaders = new TextDecoder('iso-8859-1').decode(partRawHeaderBytes);
 		const partHeaders = parsePartHeaders(partRawHeaders);
 		const partContentType = partHeaders['content-type'] || 'text/plain';
 		const disposition = (partHeaders['content-disposition'] || '').toLowerCase();
@@ -171,24 +212,24 @@ function parseMultipartCompat(rawBody: string, contentTypeHeader: string): Multi
 		const isHtml = /text\/html/i.test(partContentType);
 		const isAttachment = disposition.includes('attachment') || disposition.includes('filename=');
 
-		let boundaryIndex = buffer.indexOf(`\r\n${boundary}`);
-		let boundaryLength = (`\r\n${boundary}`).length;
+		let boundaryIndex = indexOfBytes(buffer, partBoundaryCrlf);
+		let boundaryLength = partBoundaryCrlf.length;
 		if (boundaryIndex === -1) {
-			boundaryIndex = buffer.indexOf(`\n${boundary}`);
-			boundaryLength = (`\n${boundary}`).length;
+			boundaryIndex = indexOfBytes(buffer, partBoundaryLf);
+			boundaryLength = partBoundaryLf.length;
 		}
 
-		let partContent = '';
+		let partContent: Uint8Array = new Uint8Array(0);
 		if (boundaryIndex !== -1) {
 			partContent = buffer.slice(0, boundaryIndex);
 			buffer = buffer.slice(boundaryIndex + boundaryLength);
 		} else {
 			partContent = buffer;
-			buffer = '';
+			buffer = new Uint8Array(0);
 		}
 
 		if (!isAttachment && (isText || isHtml)) {
-			const raw = partContent.replace(/^(\r?\n)/, '');
+			const raw = stripLeadingNewlineBytes(partContent);
 			const decoded = decodeBody(raw, contentTransferEncoding, parseCharset(partContentType));
 			if (isText) {
 				result.textCharset = decoded.charset;
@@ -202,7 +243,7 @@ function parseMultipartCompat(rawBody: string, contentTypeHeader: string): Multi
 			}
 		}
 
-		if (buffer.startsWith('--')) {
+		if (bytesStartsWith(buffer, dashDash)) {
 			break;
 		}
 	}
@@ -473,7 +514,7 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 
 	const fallbackDecision = shouldUseMultipartCompat(contentType, rawHeaders['content-type'] || '', rawBody, parsed);
 	if (fallbackDecision.shouldFallback) {
-		const compatBody = parseMultipartCompat(rawBody, rawHeaders['content-type'] || '');
+		const compatBody = parseMultipartCompat(rawBodyBytes, rawHeaders['content-type'] || '');
 		if (compatBody.text) {
 			result.text = stripSingleTrailingNewline(compatBody.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
@@ -492,7 +533,7 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	}
 
 	if (contentType.includes('multipart/')) {
-		const compatBody = parseMultipartCompat(rawBody, rawHeaders['content-type'] || '');
+		const compatBody = parseMultipartCompat(rawBodyBytes, rawHeaders['content-type'] || '');
 		if (parsed.text) {
 			result.text = stripSingleTrailingNewline(parsed.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;

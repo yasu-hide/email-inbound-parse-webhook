@@ -645,6 +645,90 @@ describe('postal-mime adapter multipart compat details', () => {
 		expect(parsed.text).not.toContain('�');
 		expect(parsed.textCharset).toBe('euc-jp');
 	});
+
+	it('recovers mislabeled multipart/alternative text part from Shift_JIS raw bytes', async () => {
+		const boundary = '----mojibake-sjis-alt';
+		const raw = bytesFrom(
+			[
+				'From: Sender <sender@example.com>',
+				'Subject: mojibake sjis alternative',
+				`Content-Type: multipart/alternative; boundary="${boundary}"`,
+				'',
+				`--${boundary}`,
+				'Content-Type: text/plain; charset=utf-8',
+				'',
+				'',
+			].join('\r\n'),
+			SJIS_NIHONGO,
+			`\r\n--${boundary}--`,
+		);
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe('日本語');
+		expect(parsed.text).not.toContain('�');
+		expect(parsed.textCharset).toBe('windows-31j');
+		expect(Array.from(parsed[parsedBodyBytesSymbol]?.text ?? [])).toEqual(SJIS_NIHONGO);
+	});
+
+	it('recovers mislabeled multipart/mixed text part from Shift_JIS raw bytes', async () => {
+		const boundary = '----mojibake-sjis-mixed';
+		const raw = bytesFrom(
+			[
+				'From: Sender <sender@example.com>',
+				'Subject: mojibake sjis mixed',
+				`Content-Type: multipart/mixed; boundary="${boundary}"`,
+				'',
+				`--${boundary}`,
+				'Content-Type: text/plain; charset=utf-8',
+				'',
+				'',
+			].join('\r\n'),
+			SJIS_NIHONGO,
+			`\r\n--${boundary}--`,
+		);
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe('日本語');
+		expect(parsed.text).not.toContain('�');
+		expect(parsed.textCharset).toBe('windows-31j');
+		expect(Array.from(parsed[parsedBodyBytesSymbol]?.text ?? [])).toEqual(SJIS_NIHONGO);
+	});
+
+	it('strips a single leading CRLF from part content in compat fallback', async () => {
+		const boundary = '----leading-crlf';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Subject: leading crlf',
+			`Content-Type: multipart/alternative; boundary="${boundary}"`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'',
+			'padded body',
+		].join('\r\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe('padded body');
+	});
+
+	it('strips a single leading LF from part content in LF-only compat fallback', async () => {
+		const boundary = '----leading-lf';
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Subject: leading lf',
+			`Content-Type: multipart/alternative; boundary="${boundary}"`,
+			'',
+			`--${boundary}`,
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'',
+			'lf padded body',
+		].join('\n');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe('lf padded body');
+	});
 });
 
 describe('inspectMultipartFallbackForRawInput', () => {
