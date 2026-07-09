@@ -507,14 +507,15 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	}
 
 	const declaredCharset = normalizeCharset(parseCharset(rawHeaders['content-type'])) ?? 'utf-8';
-	const contentType = (rawHeaders['content-type'] || '').toLowerCase();
+	const contentTypeHeader = rawHeaders['content-type'] || '';
+	const contentType = contentTypeHeader.toLowerCase();
 	const contentTransferEncoding = (rawHeaders['content-transfer-encoding'] || '').toLowerCase();
 	const rawBody = extractRawBody(raw);
 	const rawBodyBytes = extractRawBodyBytes(raw);
 
-	const fallbackDecision = shouldUseMultipartCompat(contentType, rawHeaders['content-type'] || '', rawBody, parsed);
+	const fallbackDecision = shouldUseMultipartCompat(contentType, contentTypeHeader, rawBody, parsed);
 	if (fallbackDecision.shouldFallback) {
-		const compatBody = parseMultipartCompat(rawBodyBytes, rawHeaders['content-type'] || '');
+		const compatBody = parseMultipartCompat(rawBodyBytes, contentTypeHeader);
 		if (compatBody.text) {
 			result.text = stripSingleTrailingNewline(compatBody.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
@@ -533,7 +534,7 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	}
 
 	if (contentType.includes('multipart/')) {
-		const compatBody = parseMultipartCompat(rawBodyBytes, rawHeaders['content-type'] || '');
+		const compatBody = parseMultipartCompat(rawBodyBytes, contentTypeHeader);
 		if (parsed.text) {
 			result.text = stripSingleTrailingNewline(parsed.text);
 			result.textCharset = normalizeCharset(compatBody.textCharset) ?? declaredCharset;
