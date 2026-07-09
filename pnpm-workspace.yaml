@@ -2,3 +2,7 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+
+overrides:
+  esbuild: ^0.28.1
+  undici: ^7.28.0
