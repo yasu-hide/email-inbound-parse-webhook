@@ -38,6 +38,7 @@
 - `WEBHOOK_URL`: 必須
 - `INBOUND_PARSE_WEBHOOK_PRIVATE_KEY`: 必須
 - `MAX_MESSAGE_SIZE`: 任意
+- `PAYLOAD_PREVIEW_TOKEN`: 任意（payload-preview エンドポイント利用時のみ必要）
 
 `MAX_MESSAGE_SIZE` が未設定、または数値でない場合、本 Worker は `10485760` バイトを使用します。
 `INBOUND_PARSE_WEBHOOK_PRIVATE_KEY` は ECDSA prime256v1（P-256）の PKCS#8 PEM private key を想定します。改行を `\n` としてエスケープした値も利用できます。
@@ -57,6 +58,9 @@ payload 契約の回帰観点は `PAYLOAD_CONTRACT_CHECKLIST.md` を参照しま
   - JSON 不正: `400` (`{ "error": "Invalid JSON body" }`)
   - HTTP メソッド不正: `405`
   - 未知パス: `404`
+  - 認証失敗（未設定/欠如/不一致/長さ超過）: `403`
+
+認証チェックは HTTP メソッド判定より前に行われるため、認証に失敗したリクエストは非 POST であっても `405` ではなく `403` になります。
 
 ### 4.1 事前検証
 

@@ -7,14 +7,9 @@ import {
 } from './inbound-policy';
 import { parseEmailStream } from './email-parser';
 import { postWebhook } from './webhook-client';
+import { verifyPreviewToken } from './preview-auth';
 import { buildWebhookPayload, payloadToFormData } from './webhook-payload-builder';
 import type { ParsedResult } from './email-parser';
-
-type WorkerEnv = Env & {
-	WEBHOOK_URL?: string;
-	INBOUND_PARSE_WEBHOOK_PRIVATE_KEY?: string;
-	MAX_MESSAGE_SIZE?: number;
-};
 
 const PAYLOAD_PREVIEW_PATH = '/internal/payload-preview';
 
@@ -35,10 +30,15 @@ function formDataToObject(form: FormData): Record<string, string> {
 }
 
 export default {
-	async fetch(request: Request) {
+	async fetch(request: Request, env: Env) {
 		const url = new URL(request.url);
 		if (url.pathname !== PAYLOAD_PREVIEW_PATH) {
 			return new Response('Not Found', { status: 404 });
+		}
+
+		if (!(await verifyPreviewToken(request, env.PAYLOAD_PREVIEW_TOKEN))) {
+			console.warn('payload_preview.auth_failed');
+			return Response.json({ error: 'Forbidden' }, { status: 403 });
 		}
 
 		if (request.method !== 'POST') {
@@ -66,7 +66,7 @@ export default {
 		});
 	},
 
-	async email(message, env: WorkerEnv, ctx) {
+	async email(message, env: Env, ctx) {
 		console.info('email.received', { from: message.from, to: message.to, rawSize: (message as any).rawSize });
 
 		if (!ensureWebhookConfigured(message, env.WEBHOOK_URL)) return;
@@ -102,4 +102,4 @@ export default {
 			rejectWebhookSigningError(message, e);
 		}
 	},
-} satisfies ExportedHandler<WorkerEnv>;
+} satisfies ExportedHandler<Env>;

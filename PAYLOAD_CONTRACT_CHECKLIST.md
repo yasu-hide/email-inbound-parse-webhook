@@ -56,10 +56,11 @@
 
 ## 6. エンドポイント検証
 
-`POST /internal/payload-preview` で以下を確認する。
+`POST /internal/payload-preview` で以下を確認する。`Authorization: Bearer <PAYLOAD_PREVIEW_TOKEN>` ヘッダが必須。
 
 - 200: 正常系で `payload` / `headerCharsets` / `formFields` を返す。
 - 400: 不正 JSON を拒否する。
+- 403: 認証失敗（未設定/欠如/不一致/長さ超過）を拒否する。
 - 405: 非 POST を拒否する。
 - 404: 未知パスを拒否する。
 
