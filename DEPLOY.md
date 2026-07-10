@@ -74,6 +74,14 @@ openssl pkey \
 
 private key は Secret です。PEM ファイルはリポジトリにコミットしないでください。登録後は安全な場所へ保管するか削除してください。
 
+`PAYLOAD_PREVIEW_TOKEN` は `POST /internal/payload-preview`（デバッグ用エンドポイント）専用の secret です。`secrets.required` には含めていないため未設定でも `wrangler deploy` は失敗しませんが、未設定の場合は当該エンドポイントのみ `403` を返します（メール処理には影響しません）。
+
+```bash
+openssl rand -hex 32 | wrangler secret put PAYLOAD_PREVIEW_TOKEN
+```
+
+`wrangler secret put` はコマンド実行時点で新しい Worker バージョンを即座にデプロイします。実行タイミングに注意してください。
+
 補足:
 
 - `MAX_MESSAGE_SIZE` は任意設定です

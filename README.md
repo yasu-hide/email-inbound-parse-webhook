@@ -81,11 +81,15 @@ awk 'NF { sub(/\r$/, ""); printf "%s\\n", $0 }' inbound-parse-webhook-private.pe
 
 ```dotenv
 MAX_MESSAGE_SIZE=10485760
+PAYLOAD_PREVIEW_TOKEN=<RANDOM_HEX_TOKEN>
 ```
+
+`PAYLOAD_PREVIEW_TOKEN` は `POST /internal/payload-preview` を利用する場合のみ必要です。
 
 補足事項:
 
 - `wrangler.jsonc` に `secrets.required` を定義している場合、Wrangler はローカル開発時に `.dev.vars` または `.env` から宣言済みの必須 Secret のみを読み込みます
+- `.dev.vars` が存在する場合、Wrangler は `.env` の同名変数を読み込みません（`.dev.vars` が優先されます）
 - `.dev.vars*` および `.env*` は `.gitignore` により除外済みです
 - `MAX_MESSAGE_SIZE` は Worker 実装上は利用できますが、`wrangler.jsonc` では必須 Secret として宣言していません
 
@@ -221,7 +225,7 @@ Webhook リクエストには、送信時刻とリクエスト本文に対する
 
 具体的なテストケースは `test/index.spec.ts`、`test/mime-parser.spec.ts`、`test/postal-mime-adapter.spec.ts` を参照してください。
 
-`fetch` エントリポイントでは、`POST /internal/payload-preview` に JSON を送ることで、Email ハンドラと同じ payload builder 経路（`buildWebhookPayload` + `payloadToFormData`）の preview を確認できます。
+`fetch` エントリポイントでは、`POST /internal/payload-preview` に JSON を送ることで、Email ハンドラと同じ payload builder 経路（`buildWebhookPayload` + `payloadToFormData`）の preview を確認できます。`Authorization: Bearer <PAYLOAD_PREVIEW_TOKEN>` ヘッダが必須で、未認証/誤トークン/未設定/長さ超過（512バイト超）の場合は `403` を返します。
 
 ## 既知の制約
 

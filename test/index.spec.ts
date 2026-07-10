@@ -25,6 +25,8 @@ type RunEmailOptions = {
 let testPrivateKey = '';
 let testPublicKey: CryptoKey;
 
+const PREVIEW_TOKEN = 'test-preview-token';
+
 function bytesToBase64(bytes: Uint8Array): string {
 	let binary = '';
 	for (const byte of bytes) {
@@ -285,9 +287,13 @@ async function runEmail(raw: RawEmailInput, options: RunEmailOptions = {}) {
 	return { fetchMock, msg };
 }
 
-async function runFetch(request: Request): Promise<Response> {
+async function runFetch(request: Request, envOverride?: Record<string, unknown>): Promise<Response> {
 	const ctx = createExecutionContext();
-	const response = await (worker.fetch as (request: Request, env: unknown, ctx: ExecutionContext) => Promise<Response>)(request, {} as any, ctx);
+	const env = {
+		PAYLOAD_PREVIEW_TOKEN: PREVIEW_TOKEN,
+		...(envOverride ?? {}),
+	};
+	const response = await (worker.fetch as (request: Request, env: unknown, ctx: ExecutionContext) => Promise<Response>)(request, env as any, ctx);
 	await waitOnExecutionContext(ctx);
 	return response;
 }
@@ -811,7 +817,7 @@ describe('fetch payload preview endpoint', () => {
 	it('returns payload preview using shared payload builder path', async () => {
 		const request = new Request('https://example.test/internal/payload-preview', {
 			method: 'POST',
-			headers: { 'content-type': 'application/json' },
+			headers: { 'content-type': 'application/json', Authorization: `Bearer ${PREVIEW_TOKEN}` },
 			body: JSON.stringify({
 				parsed: {
 					from: 'Parsed Sender <sender@example.com>',
@@ -854,7 +860,7 @@ describe('fetch payload preview endpoint', () => {
 	it('returns 400 when payload preview body is invalid json', async () => {
 		const request = new Request('https://example.test/internal/payload-preview', {
 			method: 'POST',
-			headers: { 'content-type': 'application/json' },
+			headers: { 'content-type': 'application/json', Authorization: `Bearer ${PREVIEW_TOKEN}` },
 			body: '{broken',
 		});
 
@@ -864,7 +870,10 @@ describe('fetch payload preview endpoint', () => {
 	});
 
 	it('returns 405 for non-POST request on payload preview endpoint', async () => {
-		const request = new Request('https://example.test/internal/payload-preview', { method: 'GET' });
+		const request = new Request('https://example.test/internal/payload-preview', {
+			method: 'GET',
+			headers: { Authorization: `Bearer ${PREVIEW_TOKEN}` },
+		});
 		const response = await runFetch(request);
 		expect(response.status).toBe(405);
 	});
@@ -873,5 +882,50 @@ describe('fetch payload preview endpoint', () => {
 		const request = new Request('https://example.test/unknown', { method: 'POST' });
 		const response = await runFetch(request);
 		expect(response.status).toBe(404);
+	});
+
+	it('returns 403 when payload preview request has no Authorization header', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				parsed: { from: 'sender@example.com', to: 'receiver@example.com' },
+			}),
+		});
+
+		const response = await runFetch(request);
+		expect(response.status).toBe(403);
+	});
+
+	it('returns 403 when payload preview request has an incorrect token', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', Authorization: 'Bearer wrong-token' },
+			body: JSON.stringify({
+				parsed: { from: 'sender@example.com', to: 'receiver@example.com' },
+			}),
+		});
+
+		const response = await runFetch(request);
+		expect(response.status).toBe(403);
+	});
+
+	it('returns 403 when PAYLOAD_PREVIEW_TOKEN is not configured', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', Authorization: `Bearer ${PREVIEW_TOKEN}` },
+			body: JSON.stringify({
+				parsed: { from: 'sender@example.com', to: 'receiver@example.com' },
+			}),
+		});
+
+		const response = await runFetch(request, { PAYLOAD_PREVIEW_TOKEN: undefined });
+		expect(response.status).toBe(403);
+	});
+
+	it('returns 403 instead of 405 for non-POST request without Authorization header', async () => {
+		const request = new Request('https://example.test/internal/payload-preview', { method: 'GET' });
+		const response = await runFetch(request);
+		expect(response.status).toBe(403);
 	});
 });
