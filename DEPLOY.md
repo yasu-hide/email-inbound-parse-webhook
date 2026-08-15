@@ -10,7 +10,14 @@ pnpm run deploy:worker
 
 ## GitHub Actions デプロイ
 
-`main` ブランチへの push をトリガーに、以下の順序で実行します。
+`main` ブランチへの push のうち、次のファイルに変更が含まれる場合のみトリガーされます。
+
+- `src/**`
+- `wrangler.jsonc`
+- `package.json`
+- `pnpm-lock.yaml`
+
+トリガー時は、以下の順序で実行します。
 
 1. `test` ジョブで `pnpm test` を実行
 2. `test` ジョブで `pnpm run baseline:compare:ci` を実行（固定期待値との比較ゲート）
