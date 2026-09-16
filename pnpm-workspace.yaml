@@ -4,6 +4,10 @@ allowBuilds:
   workerd: true
 
 overrides:
+  baseline-browser-mapping@>=2.0.0 <2.11.0: '>=2.11.0'
+  browserslist@<=4.28.6: '>=4.28.7'
   esbuild: ^0.28.1
+  nanoid@<3.3.18: '>=3.3.18'
   postcss@<=8.5.17: '>=8.5.18'
+  sharp@<0.35.4: '>=0.35.4'
   undici: ^7.28.0
