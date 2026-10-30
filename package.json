@@ -30,6 +30,6 @@
 		"wrangler": "^4.152.0"
 	},
 	"dependencies": {
-		"postal-mime": "^2.7.4"
+		"postal-mime": "^4.1.4"
 	}
 }
