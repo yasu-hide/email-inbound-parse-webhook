@@ -82,39 +82,53 @@ function setCompatBodyBytes(result: MultipartCompatResult, field: 'text' | 'html
 	};
 }
 
-function findHeaderSection(bytes: Uint8Array): { headerEnd: number; separatorLength: number } {
-	for (let i = 0; i < bytes.length - 3; i++) {
-		if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) {
-			return { headerEnd: i, separatorLength: 4 };
+// Same header field start pattern as postal-mime 4.1.4 (mime-node.ts)
+const FIELD_START = /^(?:From |[!-9;-~]*[ \t]*:)/;
+
+type HeaderSection = { headerEnd: number; bodyStart: number };
+
+// Splits the top-level header block the way postal-mime 4.1.4 does: an empty line ends the
+// headers (body starts after it), and a line that is neither a field nor a fold ends them too
+// (body starts at that line).
+function findHeaderSection(bytes: Uint8Array): HeaderSection {
+	const decoder = new TextDecoder('iso-8859-1');
+	let lineStart = 0;
+	while (lineStart < bytes.length) {
+		const lineFeed = bytes.indexOf(10, lineStart);
+		const nextLineStart = lineFeed === -1 ? bytes.length : lineFeed + 1;
+		// Like postal-mime's readLine, drop every trailing CR / LF of the line
+		let lineEnd = nextLineStart;
+		while (lineEnd > lineStart && (bytes[lineEnd - 1] === 13 || bytes[lineEnd - 1] === 10)) {
+			lineEnd--;
 		}
-	}
-	for (let i = 0; i < bytes.length - 1; i++) {
-		if (bytes[i] === 10 && bytes[i + 1] === 10) {
-			return { headerEnd: i, separatorLength: 2 };
+		if (lineEnd === lineStart) {
+			return { headerEnd: lineStart, bodyStart: nextLineStart };
 		}
+		const firstByte = bytes[lineStart];
+		if (firstByte !== 32 && firstByte !== 9 && !FIELD_START.test(decoder.decode(bytes.subarray(lineStart, lineEnd)))) {
+			return { headerEnd: lineStart, bodyStart: lineStart };
+		}
+		lineStart = nextLineStart;
 	}
-	return { headerEnd: bytes.length, separatorLength: 0 };
+	return { headerEnd: bytes.length, bodyStart: bytes.length };
 }
 
-function parseHeadersFromRaw(raw: ArrayBuffer): { rawHeaders: Record<string, string>; decodedHeaders: Record<string, string> } {
-	const bytes = new Uint8Array(raw);
-	const { headerEnd } = findHeaderSection(bytes);
+function parseHeadersFromRaw(
+	bytes: Uint8Array,
+	{ headerEnd }: HeaderSection,
+): { rawHeaders: Record<string, string>; decodedHeaders: Record<string, string> } {
 	const headerText = new TextDecoder('iso-8859-1').decode(bytes.slice(0, headerEnd));
 	const rawHeaders = parseRawHeaderMap(headerText);
 	const decodedHeaders = decodeHeaderMap(rawHeaders);
 	return { rawHeaders, decodedHeaders };
 }
 
-function extractRawBody(raw: ArrayBuffer): string {
-	const bytes = new Uint8Array(raw);
-	const { headerEnd, separatorLength } = findHeaderSection(bytes);
-	return new TextDecoder('iso-8859-1').decode(bytes.slice(headerEnd + separatorLength));
+function extractRawBody(bytes: Uint8Array, { bodyStart }: HeaderSection): string {
+	return new TextDecoder('iso-8859-1').decode(bytes.slice(bodyStart));
 }
 
-function extractRawBodyBytes(raw: ArrayBuffer): Uint8Array {
-	const bytes = new Uint8Array(raw);
-	const { headerEnd, separatorLength } = findHeaderSection(bytes);
-	return bytes.slice(headerEnd + separatorLength);
+function extractRawBodyBytes(bytes: Uint8Array, { bodyStart }: HeaderSection): Uint8Array {
+	return bytes.slice(bodyStart);
 }
 
 function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, fromIndex = 0): number {
@@ -449,7 +463,9 @@ export async function inspectMultipartFallbackForRawInput(rawInput: string | Uin
 	const bytes = rawInput instanceof Uint8Array ? rawInput : new TextEncoder().encode(rawInput);
 	const raw = toContiguousArrayBuffer(bytes);
 	const parsed = await PostalMime.parse(raw);
-	const { rawHeaders } = parseHeadersFromRaw(raw);
+	const rawBytes = new Uint8Array(raw);
+	const headerSection = findHeaderSection(rawBytes);
+	const { rawHeaders } = parseHeadersFromRaw(rawBytes, headerSection);
 	const contentTypeHeader = rawHeaders['content-type'] || '';
 	const contentType = contentTypeHeader.toLowerCase();
 
@@ -461,7 +477,7 @@ export async function inspectMultipartFallbackForRawInput(rawInput: string | Uin
 		};
 	}
 
-	const rawBody = extractRawBody(raw);
+	const rawBody = extractRawBody(rawBytes, headerSection);
 	const decision = shouldUseMultipartCompat(contentType, contentTypeHeader, rawBody, parsed);
 	return {
 		isMultipart: true,
@@ -475,7 +491,9 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	const raw = await new Response(stream).arrayBuffer();
 	const parsed = await PostalMime.parse(raw);
 	const headersFromPostal = buildHeaderMap(parsed.headers);
-	const { rawHeaders, decodedHeaders } = parseHeadersFromRaw(raw);
+	const rawBytes = new Uint8Array(raw);
+	const headerSection = findHeaderSection(rawBytes);
+	const { rawHeaders, decodedHeaders } = parseHeadersFromRaw(rawBytes, headerSection);
 
 	const result: ParsedResult = {
 		headers: Object.keys(decodedHeaders).length > 0 ? decodedHeaders : headersFromPostal,
@@ -510,8 +528,8 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 	const contentTypeHeader = rawHeaders['content-type'] || '';
 	const contentType = contentTypeHeader.toLowerCase();
 	const contentTransferEncoding = (rawHeaders['content-transfer-encoding'] || '').toLowerCase();
-	const rawBody = extractRawBody(raw);
-	const rawBodyBytes = extractRawBodyBytes(raw);
+	const rawBody = extractRawBody(rawBytes, headerSection);
+	const rawBodyBytes = extractRawBodyBytes(rawBytes, headerSection);
 
 	const fallbackDecision = shouldUseMultipartCompat(contentType, contentTypeHeader, rawBody, parsed);
 	if (fallbackDecision.shouldFallback) {

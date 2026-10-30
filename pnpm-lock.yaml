@@ -19,8 +19,8 @@ importers:
   .:
     dependencies:
       postal-mime:
-        specifier: 4.1.3
-        version: 4.1.3
+        specifier: ^4.1.4
+        version: 4.1.4
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.23.0
@@ -1030,8 +1030,8 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
-  postal-mime@4.1.3:
-    resolution: {integrity: sha512-uTaJw2AOQily839aQfAHES55NPPM2iuhjjb9uCoSETo29KWmvErrlrcol5sQhxCFaljuwBjCW4nCDtdIzltuKQ==}
+  postal-mime@4.1.4:
+    resolution: {integrity: sha512-+6Qsn7Q2TSLMScfN4X2VQIclPRKgDAtKhytQex3fVSV/+HgVaawtsQGzKYDQLQIBR7b4Vfg+88WRGvuF/kwLSw==}
     engines: {node: '>=20'}
 
   postcss@8.5.31:
@@ -2040,7 +2040,7 @@ snapshots:
 
   picomatch@4.0.7: {}
 
-  postal-mime@4.1.3: {}
+  postal-mime@4.1.4: {}
 
   postcss@8.5.31:
     dependencies:
