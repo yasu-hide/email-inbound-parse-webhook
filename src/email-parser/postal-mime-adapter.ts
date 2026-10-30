@@ -1,4 +1,4 @@
-import PostalMime, { type Address, type Mailbox } from 'postal-mime';
+import PostalMime, { type Address, type Header, type Mailbox } from 'postal-mime';
 import { parseCharset } from '../email-normalizer';
 import { normalizeCharset } from '../email-normalizer-utils';
 import { decodeBody } from './body-decoder';
@@ -38,6 +38,54 @@ function buildHeaderMap(headers: Array<{ key: string; value: string }>): Record<
 		out[header.key] = out[header.key] ? `${out[header.key]}, ${header.value}` : header.value;
 	}
 	return out;
+}
+
+// Like postal-mime, the first occurrence of a header decides how the body is read
+function firstHeaderValue(headers: Header[], key: string): string | undefined {
+	return headers.find((header) => header.key === key)?.value;
+}
+
+// Removes RFC 822 comments like postal-mime's stripComments: nested, escaped, not inside quotes,
+// and an unterminated comment is kept as plain text
+function stripComments(value: string): string {
+	let result = '';
+	let depth = 0;
+	let escaped = false;
+	let inQuote = false;
+	let commentStart = -1;
+	let runStart = 0;
+	for (let i = 0; i < value.length; i++) {
+		const chr = value[i];
+		if (escaped) {
+			escaped = false;
+		} else if (chr === '\\') {
+			escaped = true;
+		} else if (chr === '"' && depth === 0) {
+			inQuote = !inQuote;
+		} else if (!inQuote && (chr === '(' || (chr === ')' && depth > 0))) {
+			if (chr === '(') {
+				if (depth === 0) commentStart = i;
+				depth++;
+			} else {
+				depth--;
+			}
+			result += value.slice(runStart, i);
+			runStart = i + 1;
+			continue;
+		}
+		if (depth > 0) {
+			result += value.slice(runStart, i);
+			runStart = i + 1;
+		}
+	}
+	if (depth === 0) return result + value.slice(runStart);
+	return value.includes(';', commentStart) ? value : result + value.slice(runStart);
+}
+
+// The first token after comments are removed, as postal-mime reads Content-Transfer-Encoding
+function normalizeContentTransferEncoding(value: string): string {
+	const match = stripComments(value).toLowerCase().match(/^[ \t]*([\w-]+)/);
+	return match ? match[1] : '';
 }
 
 function stripSingleTrailingNewline(value: string): string {
@@ -280,6 +328,7 @@ export type MultipartFallbackReason =
 	| 'missing_closing_boundary'
 	| 'part_header_separator_missing'
 	| 'part_delimiter_misaligned'
+	| 'part_header_malformed'
 	| 'complex_mixed_structure'
 	| 'missing_text_and_html'
 	| 'replacement_character_detected';
@@ -295,6 +344,59 @@ export type MultipartFallbackInspection = {
 	shouldFallback: boolean;
 	reason?: MultipartFallbackReason;
 };
+
+// End of the line at `start` without its LF and trailing CRs
+function lineEndWithoutEol(body: string, start: number): number {
+	const lf = body.indexOf('\n', start);
+	let end = lf < 0 ? body.length : lf;
+	while (end > start && body.charCodeAt(end - 1) === 13) end--;
+	return end;
+}
+
+// Like postal-mime: the delimiter, optionally followed by "--", then only SP/HTAB up to the line end
+function delimiterKind(body: string, start: number, end: number, delimiter: string): 'open' | 'close' | null {
+	if (!body.startsWith(delimiter, start)) return null;
+	let pos = start + delimiter.length;
+	const closing = body.startsWith('--', pos) && pos + 2 <= end;
+	if (closing) pos += 2;
+	for (; pos < end; pos++) {
+		const code = body.charCodeAt(pos);
+		if (code !== 0x20 && code !== 0x09) return null;
+	}
+	return closing ? 'close' : 'open';
+}
+
+// Whether a part header line before the empty line is neither a field nor a fold. postal-mime
+// 4.1.4 ends the part headers at such a line, while parseMultipartCompat reads on to the empty line.
+// Only delimiter lines and part header lines are visited, never the part bodies.
+function hasJunkPartHeader(rawBody: string, delimiter: string): boolean {
+	let pos = 0;
+	while (pos < rawBody.length) {
+		const found = rawBody.indexOf(delimiter, pos);
+		if (found < 0) return false;
+		pos = found + delimiter.length;
+		// Only a line start can hold a delimiter; checking it first keeps a line that repeats the
+		// delimiter text from being measured once per occurrence
+		if (found > 0 && rawBody[found - 1] !== '\n') continue;
+		if (delimiterKind(rawBody, found, lineEndWithoutEol(rawBody, found), delimiter) !== 'open') continue;
+		// Junk in a part that reaches a delimiter without an empty line does not count; the
+		// existing checks handle such a part.
+		let sawJunk = false;
+		pos = rawBody.indexOf('\n', found) + 1 || rawBody.length;
+		while (pos < rawBody.length) {
+			const end = lineEndWithoutEol(rawBody, pos);
+			if (delimiterKind(rawBody, pos, end, delimiter)) break;
+			if (end === pos) {
+				if (sawJunk) return true;
+				break;
+			}
+			const first = rawBody[pos];
+			if (first !== ' ' && first !== '\t' && !FIELD_START.test(rawBody.slice(pos, end))) sawJunk = true;
+			pos = rawBody.indexOf('\n', pos) + 1 || rawBody.length;
+		}
+	}
+	return false;
+}
 
 function detectMultipartAnomaly(rawBody: string, contentTypeHeader: string): MultipartFallbackReason | null {
 	const boundary = extractMultipartBoundary(contentTypeHeader);
@@ -331,6 +433,10 @@ function shouldFallbackAlternative(
 	}
 	if (parsed.text?.includes('\uFFFD') || parsed.html?.includes('\uFFFD')) {
 		return { shouldFallback: true, reason: 'replacement_character_detected' };
+	}
+	const boundary = extractMultipartBoundary(contentTypeHeader);
+	if (boundary && hasJunkPartHeader(rawBody, boundary)) {
+		return { shouldFallback: true, reason: 'part_header_malformed' };
 	}
 	return { shouldFallback: false };
 }
@@ -435,6 +541,10 @@ function shouldFallbackMixed(
 	if (parsed.text?.includes('\uFFFD') || parsed.html?.includes('\uFFFD')) {
 		return { shouldFallback: true, reason: 'replacement_character_detected' };
 	}
+	const boundary = extractMultipartBoundary(contentTypeHeader);
+	if (boundary && hasJunkPartHeader(rawBody, boundary)) {
+		return { shouldFallback: true, reason: 'part_header_malformed' };
+	}
 	return { shouldFallback: false };
 }
 
@@ -465,8 +575,7 @@ export async function inspectMultipartFallbackForRawInput(rawInput: string | Uin
 	const parsed = await PostalMime.parse(raw);
 	const rawBytes = new Uint8Array(raw);
 	const headerSection = findHeaderSection(rawBytes);
-	const { rawHeaders } = parseHeadersFromRaw(rawBytes, headerSection);
-	const contentTypeHeader = rawHeaders['content-type'] || '';
+	const contentTypeHeader = firstHeaderValue(parsed.headers, 'content-type') || '';
 	const contentType = contentTypeHeader.toLowerCase();
 
 	if (!contentType.includes('multipart/')) {
@@ -524,10 +633,10 @@ export async function parseEmailStreamWithPostalMime(stream: ReadableStream): Pr
 		result.subjectCharset = 'utf-8';
 	}
 
-	const declaredCharset = normalizeCharset(parseCharset(rawHeaders['content-type'])) ?? 'utf-8';
-	const contentTypeHeader = rawHeaders['content-type'] || '';
+	const contentTypeHeader = firstHeaderValue(parsed.headers, 'content-type') || '';
+	const declaredCharset = normalizeCharset(parseCharset(contentTypeHeader)) ?? 'utf-8';
 	const contentType = contentTypeHeader.toLowerCase();
-	const contentTransferEncoding = (rawHeaders['content-transfer-encoding'] || '').toLowerCase();
+	const contentTransferEncoding = normalizeContentTransferEncoding(firstHeaderValue(parsed.headers, 'content-transfer-encoding') || '');
 	const rawBody = extractRawBody(rawBytes, headerSection);
 	const rawBodyBytes = extractRawBodyBytes(rawBytes, headerSection);
 

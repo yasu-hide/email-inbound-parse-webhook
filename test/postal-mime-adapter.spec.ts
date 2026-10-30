@@ -461,6 +461,23 @@ describe('postal-mime adapter top-level header block', () => {
 				'hello',
 			].join('\r\n'),
 		],
+		// 重複したヘッダーと CTE の書式(Issue #49 項目 2): 最初の出現と、コメント除去後の先頭トークンを採用する
+		['duplicate Content-Transfer-Encoding', ['Subject: s', 'Content-Transfer-Encoding: base64', 'Content-Transfer-Encoding: base64', '', btoa('dup cte')].join('\r\n')],
+		['first Content-Transfer-Encoding wins', ['Subject: s', 'Content-Transfer-Encoding: base64', 'Content-Transfer-Encoding: 7bit', '', btoa('first cte')].join('\r\n')],
+		['duplicate Content-Type', ['Subject: s', 'Content-Type: text/plain; charset=utf-8', 'Content-Type: text/html; charset=utf-8', '', '<p>x</p>'].join('\r\n')],
+		['CTE with a leading comment', ['Subject: s', 'Content-Transfer-Encoding: (c) base64', '', btoa('comment before')].join('\r\n')],
+		['CTE with a trailing comment', ['Subject: s', 'Content-Transfer-Encoding: base64 (c)', '', btoa('comment after')].join('\r\n')],
+		['quoted CTE', ['Subject: s', 'Content-Transfer-Encoding: "base64"', '', btoa('quoted cte')].join('\r\n')],
+		['CTE with a leading token', ['Subject: s', 'Content-Transfer-Encoding: x base64', '', btoa('leading token')].join('\r\n')],
+		['mixed-case CTE with trailing whitespace', ['Subject: s', 'Content-Transfer-Encoding: Base64 ', '', btoa('mixed case')].join('\r\n')],
+		// コメントの入れ子・エスケープ・途中のコメントなど、postal-mime の stripComments と同じ除去結果になる形
+		['CTE with a nested comment', ['Subject: s', 'Content-Transfer-Encoding: ((c)) base64', '', btoa('nested comment')].join('\r\n')],
+		['CTE with a comment containing a nested comment', ['Subject: s', 'Content-Transfer-Encoding: (a (b) c) base64', '', btoa('inner comment')].join('\r\n')],
+		['CTE with an escaped parenthesis in a comment', ['Subject: s', 'Content-Transfer-Encoding: (a\\) b) base64', '', btoa('escaped paren')].join('\r\n')],
+		['CTE with consecutive comments', ['Subject: s', 'Content-Transfer-Encoding: (c)(d) base64', '', btoa('two comments')].join('\r\n')],
+		['CTE with a comment inside the token', ['Subject: s', 'Content-Transfer-Encoding: base(c)64', '', btoa('mid token')].join('\r\n')],
+		['CTE with an unterminated comment', ['Subject: s', 'Content-Transfer-Encoding: (unterminated base64', '', btoa('unterminated')].join('\r\n')],
+		['CTE with a quoted string inside a comment', ['Subject: s', 'Content-Transfer-Encoding: (a "x) y" z) base64', '', btoa('quote in comment')].join('\r\n')],
 	];
 
 	it.each(differentialCorpus)('matches postal-mime text and body bytes: %s', async (_name, raw) => {
@@ -546,9 +563,276 @@ describe('postal-mime adapter top-level header block', () => {
 		expect(new TextDecoder().decode(crlfInBody[parsedBodyBytesSymbol]?.text)).toBe('body line\r\n\r\nmore');
 	});
 
-	// 既知のギャップ: パートヘッダーは従来どおり空行で分割するため、パートヘッダーに junk 行があると
-	// payload.text(postal-mime 4.1.4)と送信バイト(compat)が食い違い得る(Issue #47 のスコープ外)
-	it.todo('aligns part header splitting with postal-mime 4.1.4 when a part header contains a junk line');
+	it('decodes a duplicated Content-Transfer-Encoding while keeping the joined header map', async () => {
+		const parsed = await parseRaw(['Subject: s', 'Content-Transfer-Encoding: base64', 'Content-Transfer-Encoding: base64', '', btoa('dup cte')].join('\r\n'));
+		expect(parsed.text).toBe('dup cte');
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe('dup cte');
+		// rawHeaders / headers の結合マップの契約は変えない
+		expect(parsed.rawHeaders?.['content-transfer-encoding']).toBe('base64, base64');
+		expect(parsed.headers['content-transfer-encoding']).toBe('base64, base64');
+	});
+});
+
+describe('postal-mime adapter part header junk lines', () => {
+	// パートヘッダーに junk 行(フィールドでも折り返しでもない行)がある健全なマルチパート(Issue #49 項目 1)。
+	// postal-mime 4.1.4 は junk 行でパートヘッダーを終えるが、compat は空行まで読むため、compat フォールバックへ送り
+	// text と送信バイトをともに compat 由来に揃える
+	function junkPartRaw(subtype: 'alternative' | 'mixed', newline: string): string {
+		return [
+			'From: Sender <sender@example.com>',
+			`Content-Type: multipart/${subtype}; boundary="b"`,
+			'',
+			'--b',
+			'Content-Type: text/plain; charset=utf-8',
+			'broken line',
+			'',
+			'plain body',
+			'--b',
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html</p>',
+			'--b--',
+		].join(newline);
+	}
+
+	it.each([
+		['alternative', 'CRLF', junkPartRaw('alternative', '\r\n')],
+		['mixed', 'CRLF', junkPartRaw('mixed', '\r\n')],
+		['alternative', 'LF', junkPartRaw('alternative', '\n')],
+		['mixed', 'LF', junkPartRaw('mixed', '\n')],
+	])('falls back with part_header_malformed for multipart/%s (%s)', async (_subtype, _newline, raw) => {
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.shouldFallback).toBe(true);
+		expect(inspection.reason).toBe('part_header_malformed');
+
+		const parsed = await parseRaw(raw);
+		// compat はパートヘッダーを空行まで読むため、junk 行は本文に含まれない(4.1.3 以前と同じ出力)
+		expect(parsed.text).toBe('plain body');
+		expect(parsed.html).toBe('<p>html</p>');
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe(parsed.text);
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.html)).toBe(parsed.html);
+	});
+
+	it.each([
+		[
+			'alternative text+html with a folded part header (N14)',
+			[
+				'From: Sender <sender@example.com>',
+				'Content-Type: multipart/alternative; boundary="----n14"',
+				'',
+				'------n14',
+				'Content-Type: text/plain;',
+				'\tcharset=utf-8',
+				'',
+				'plain n14',
+				'------n14',
+				'Content-Type: text/html; charset=utf-8',
+				'',
+				'<p>html n14</p>',
+				'------n14--',
+			].join('\r\n'),
+		],
+		[
+			'nested mixed + alternative (N23)',
+			[
+				'From: Sender <sender@example.com>',
+				'Content-Type: multipart/mixed; boundary="----outer"',
+				'',
+				'------outer',
+				'Content-Type: multipart/alternative; boundary="----inner"',
+				'',
+				'------inner',
+				'Content-Type: text/plain; charset=utf-8',
+				'',
+				'plain nested',
+				'------inner',
+				'Content-Type: text/html; charset=utf-8',
+				'',
+				'<p>html nested</p>',
+				'------inner--',
+				'------outer--',
+			].join('\r\n'),
+		],
+	])('does not fall back without a junk part header line: %s', async (_name, raw) => {
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.shouldFallback).toBe(false);
+		expect(inspection.reason).toBeUndefined();
+	});
+
+	it('keeps complex_mixed_structure for a message/rfc822 part (N24)', async () => {
+		// N24 の形は従来どおり complex_mixed_structure でフォールバックする(rfc822 本文中のヘッダー行は検査しない)
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Content-Type: multipart/mixed; boundary="----n24"',
+			'',
+			'------n24',
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'outer text',
+			'------n24',
+			'Content-Type: message/rfc822',
+			'',
+			'From: nested@example.com',
+			'Subject: nested message',
+			'',
+			'nested body',
+			'------n24--',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.shouldFallback).toBe(true);
+		expect(inspection.reason).toBe('complex_mixed_structure');
+	});
+
+	// 空行のないパートの junk 行は数えない。part_header_malformed にはならず、既存の判定結果のまま
+	// (alternative / mixed のどちらも shouldFallback=false、reason なし)
+	it.each(['alternative', 'mixed'])('does not report a part that reaches the next boundary without an empty line (%s)', async (subtype) => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			`Content-Type: multipart/${subtype}; boundary="b"`,
+			'',
+			'--b',
+			'Content-Type: text/plain; charset=utf-8',
+			'no separator line',
+			'--b',
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html</p>',
+			'--b--',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.shouldFallback).toBe(false);
+		expect(inspection.reason).toBeUndefined();
+	});
+
+	// 既知のギャップ(既存): 空行のないパートでは text(postal-mime)と送信バイト(compat)が食い違う
+	it.todo('keeps text and bodyBytes consistent for a multipart/alternative part without an empty line');
+
+	it('keeps the existing reason when a junk part header line comes with another anomaly', async () => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Content-Type: multipart/mixed; boundary="b"',
+			'',
+			'--b',
+			'Content-Type: text/plain; charset=utf-8',
+			'broken line',
+			'',
+			'plain body',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.reason).toBe('missing_closing_boundary');
+	});
+
+	function junkThenRaw(subtype: 'alternative' | 'mixed', ...afterJunk: string[]): string {
+		return [
+			'From: Sender <sender@example.com>',
+			`Content-Type: multipart/${subtype}; boundary="b"`,
+			'',
+			'--b',
+			'Content-Type: text/plain',
+			'junk line',
+			...afterJunk,
+			'',
+			'aGVsbG8=',
+			'--b--',
+		].join('\r\n');
+	}
+
+	// junk 行の後の「境界に似た行」は区切りではないので、junk 検出をリセットしない
+	it.each(['--bogus', '--b-x', '--b--x'])('still reports a junk line followed by the lookalike line %s', async (lookalike) => {
+		const raw = junkThenRaw('alternative', lookalike, 'Content-Transfer-Encoding: base64');
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.shouldFallback).toBe(true);
+		expect(inspection.reason).toBe('part_header_malformed');
+
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text));
+	});
+
+	it('does not take a body line that merely starts with the boundary for a delimiter', async () => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Content-Type: multipart/alternative; boundary="b"',
+			'',
+			'--b',
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'hello',
+			'--bar is a line',
+			'some text',
+			'',
+			'more',
+			'--b',
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>html</p>',
+			'--b--',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.reason).not.toBe('part_header_malformed');
+		const expected = await PostalMime.parse(raw);
+		const parsed = await parseRaw(raw);
+		expect(parsed.text).toBe(expected.text);
+		// bodyBytes は境界を部分文字列で照合する既存の compat リーダー由来で、この形では食い違う(既存の compat の制約のため比較しない)
+	});
+
+	it('ends the scan at a closing delimiter with trailing whitespace', async () => {
+		const raw = ['From: Sender <sender@example.com>', 'Content-Type: multipart/alternative; boundary="b"', '', '--b', 'Content-Type: text/plain', '', 'hello', '--b--  ', 'epilogue junk', '', 'tail'].join(
+			'\r\n',
+		);
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.reason).not.toBe('part_header_malformed');
+	});
+
+	it('reports a junk line in the second part', async () => {
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Content-Type: multipart/alternative; boundary="b"',
+			'',
+			'--b',
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'plain body',
+			'--b',
+			'Content-Type: text/html; charset=utf-8',
+			'broken line',
+			'',
+			'<p>html</p>',
+			'--b--',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.shouldFallback).toBe(true);
+		expect(inspection.reason).toBe('part_header_malformed');
+		const parsed = await parseRaw(raw);
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe(parsed.text);
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.html)).toBe(parsed.html);
+	});
+
+	it('scans a line that repeats the delimiter text in linear time', async () => {
+		// 区切り文字列が 1 行に大量に並ぶ入力でも、行頭でない出現は行末を探さずに読み飛ばす
+		// (二次時間だと 80 万回の反復は既定のテストタイムアウトを大きく超える)
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Content-Type: multipart/alternative; boundary="b"',
+			'',
+			'--b',
+			'Content-Type: text/plain; charset=utf-8',
+			'',
+			'hi',
+			'--b'.repeat(800_000),
+			'--b--',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.reason).not.toBe('part_header_malformed');
+	});
+
+	// 既知のギャップ: ネストしたマルチパートの内側のパートヘッダーは検査しない(compat も平坦に扱う既存の制約)
+	it.todo('falls back when a nested inner part header contains a junk line');
 });
 
 describe('postal-mime adapter multipart compat details', () => {
@@ -904,6 +1188,28 @@ describe('inspectMultipartFallbackForRawInput', () => {
 		expect(inspection.isMultipart).toBe(true);
 		expect(inspection.shouldFallback).toBe(false);
 		expect(inspection.reason).toBeUndefined();
+	});
+
+	it('uses the first Content-Type when the header is duplicated', async () => {
+		// postal-mime と同じく最初の出現(text/plain)を採用し、後のマルチパート宣言は使わない
+		const raw = [
+			'From: Sender <sender@example.com>',
+			'Content-Type: text/plain; charset=utf-8',
+			'Content-Type: multipart/alternative; boundary="b"',
+			'',
+			'--b',
+			'Content-Type: text/html; charset=utf-8',
+			'',
+			'<p>x</p>',
+			'--b--',
+		].join('\r\n');
+
+		const inspection = await inspectMultipartFallbackForRawInput(raw);
+		expect(inspection.isMultipart).toBe(false);
+		expect(inspection.contentType).toBe('text/plain; charset=utf-8');
+		const parsed = await parseRaw(raw);
+		expect(parsed.html).toBeUndefined();
+		expect(parsed.text).toContain('<p>x</p>');
 	});
 
 	it('reports missing_boundary when boundary parameter is absent', async () => {
