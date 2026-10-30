@@ -1004,14 +1004,12 @@
       "headers": {
         "from": "Sender <sender@example.com>",
         "to": "Receiver <receiver@example.com>",
-        "subject": "valid prefix",
-        "content-type": "text/plain; charset=utf-8"
+        "subject": "valid prefix"
       },
       "rawHeaders": {
         "from": "Sender <sender@example.com>",
         "to": "Receiver <receiver@example.com>",
-        "subject": "valid prefix",
-        "content-type": "text/plain; charset=utf-8"
+        "subject": "valid prefix"
       },
       "from": "Sender <sender@example.com>",
       "fromCharset": "utf-8",
@@ -1019,7 +1017,7 @@
       "toCharset": "utf-8",
       "subject": "valid prefix",
       "subjectCharset": "utf-8",
-      "text": "hello",
+      "text": "broken continuation without colon\nContent-Type: text/plain; charset=utf-8\n\nhello",
       "textCharset": "utf-8"
     },
     "payload": {
@@ -1032,7 +1030,7 @@
         "subject": "utf-8",
         "text": "utf-8"
       },
-      "text": "hello"
+      "text": "broken continuation without colon\nContent-Type: text/plain; charset=utf-8\n\nhello"
     }
   },
   {

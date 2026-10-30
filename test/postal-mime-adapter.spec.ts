@@ -1,3 +1,4 @@
+import PostalMime from 'postal-mime';
 import { describe, expect, it } from 'vitest';
 import { inspectMultipartFallbackForRawInput, parseEmailStreamWithPostalMime } from '../src/email-parser/postal-mime-adapter';
 import { parsedBodyBytesSymbol } from '../src/email-parser/types';
@@ -416,11 +417,138 @@ describe('postal-mime adapter single-part bodies', () => {
 
 		const parsed = await parseRaw(raw);
 		expect(parsed.subject).toBeUndefined();
-		expect(parsed.text).toBeUndefined();
-		// コロンを含む行が無いため rawHeaders は空になり、postal-mime のヘッダにフォールバックする
-		expect(parsed.headers).toEqual({ 'plain text without any header lines': '' });
-		expect(parsed.rawHeaders).toEqual(parsed.headers);
+		// 先頭行がヘッダーでも折り返しでもないため、postal-mime 4.1.4 と同様に入力全体が本文になる
+		expect(parsed.text).toBe(raw);
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe(raw);
+		expect(parsed.headers).toEqual({});
+		expect(parsed.rawHeaders).toEqual({});
 	});
+});
+
+// アダプタの送信バイトは CRLF のまま、postal-mime の text は LF 正規化済みで末尾に改行が付くため揃えて比べる
+function normalizeBodyForCompare(value: string): string {
+	return value.replace(/\r\n/g, '\n').replace(/\n$/, '');
+}
+
+describe('postal-mime adapter top-level header block', () => {
+	// 非マルチパートの入力で、ヘッダー/本文の分割が postal-mime 単体の結果と一致すること
+	const differentialCorpus: Array<[string, string | Uint8Array]> = [
+		['plain text', ['Subject: s', 'Content-Type: text/plain; charset=utf-8', '', 'hello', 'world'].join('\r\n')],
+		['html only', ['Subject: s', 'Content-Type: text/html; charset=utf-8', '', '<p>x</p>'].join('\r\n')],
+		['base64 text', ['Subject: s', 'Content-Transfer-Encoding: base64', '', btoa('base64 text')].join('\r\n')],
+		['empty line with extra CR', 'Subject: x\r\n\r\r\nbody'],
+		['whitespace-only line then junk', 'Subject: a\r\n \r\njunk\r\n\r\nbody'],
+		['NBSP-prefixed Content-Type', 'Subject: s\r\n Content-Type: text/html\r\n\r\n<p>x</p>'],
+		['NBSP-prefixed Content-Transfer-Encoding', 'Subject: s\r\n Content-Transfer-Encoding: base64\r\n\r\naGVsbG8='],
+		['BOM-prefixed Content-Type', 'Subject: s\r\n﻿Content-Type: text/html\r\n\r\n<p>x</p>'],
+		['leading mbox From line', 'From sender@example.com Mon Jan  1 00:00:00 2024\r\nSubject: s\r\n\r\nbody'],
+		['From line carrying Content-Type', 'Subject: s\r\nFrom Content-Type: text/html\r\n\r\n<p>x</p>'],
+		['empty-name field carrying Content-Type', 'Subject: s\r\n: Content-Type: text/html\r\n\r\n<p>x</p>'],
+		['empty-name field before Content-Type', 'Subject: s\r\n: x\r\nContent-Type: text/html\r\n\r\n<p>x</p>'],
+		['LF only', 'Subject: s\nContent-Type: text/plain\n\nbody\n\nmore'],
+		['LF headers with CRLF separator', 'Subject: s\nX-A: y\r\n\r\nbody'],
+		['LF separator with CRLF blank line in body', 'Subject: s\n\nbody line\r\n\r\nmore'],
+		['escaped From line', 'Subject: s\r\n&gt;From x\r\nContent-Type: text/html\r\n\r\n<p>x</p>'],
+		['no header lines', 'plain text without any header lines'],
+		[
+			'malformed folded header',
+			[
+				'From: Sender <sender@example.com>',
+				'Subject: valid prefix',
+				'broken continuation without colon',
+				'Content-Type: text/plain; charset=utf-8',
+				'',
+				'hello',
+			].join('\r\n'),
+		],
+	];
+
+	it.each(differentialCorpus)('matches postal-mime text and body bytes: %s', async (_name, raw) => {
+		const expected = await PostalMime.parse(raw);
+		const parsed = await parseRaw(raw);
+		for (const field of ['text', 'html'] as const) {
+			const expectedValue = expected[field];
+			if (expectedValue === undefined) {
+				expect(parsed[field]).toBeUndefined();
+				expect(parsed[parsedBodyBytesSymbol]?.[field]).toBeUndefined();
+				continue;
+			}
+			expect(normalizeBodyForCompare(parsed[field] ?? '')).toBe(normalizeBodyForCompare(expectedValue));
+			const bodyBytes = parsed[parsedBodyBytesSymbol]?.[field];
+			expect(bodyBytes).toBeDefined();
+			expect(normalizeBodyForCompare(new TextDecoder().decode(bodyBytes))).toBe(normalizeBodyForCompare(expectedValue));
+		}
+	});
+
+	it('treats a line of only CR before LF as the empty line', async () => {
+		const parsed = await parseRaw('Subject: x\r\n\r\r\nbody');
+		expect(parsed.headers).toEqual({ subject: 'x' });
+		expect(parsed.text).toBe('body');
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe('body');
+	});
+
+	it('starts the body at the junk line after a whitespace-only line', async () => {
+		const parsed = await parseRaw('Subject: a\r\n \r\njunk\r\n\r\nbody');
+		expect(parsed.subject).toBe('a');
+		expect(parsed.text).toBe('junk\n\nbody');
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe('junk\r\n\r\nbody');
+	});
+
+	it.each([
+		['NBSP-prefixed (UTF-8)', bytesFrom('Subject: s\r\n', [0xc2, 0xa0], 'Content-Type: text/html\r\n\r\n<p>x</p>')],
+		['NBSP-prefixed (latin1)', bytesFrom('Subject: s\r\n', [0xa0], 'Content-Type: text/html\r\n\r\n<p>x</p>')],
+		['BOM-prefixed', bytesFrom('Subject: s\r\n', [0xef, 0xbb, 0xbf], 'Content-Type: text/html\r\n\r\n<p>x</p>')],
+		['mbox From line', 'Subject: s\r\nFrom Content-Type: text/html\r\n\r\n<p>x</p>'],
+		['empty-name field', 'Subject: s\r\n: Content-Type: text/html\r\n\r\n<p>x</p>'],
+		['escaped From line', 'Subject: s\r\n&gt;From x\r\nContent-Type: text/html\r\n\r\n<p>x</p>'],
+	])('does not adopt a smuggled Content-Type: %s', async (_name, raw) => {
+		const parsed = await parseRaw(raw);
+		expect(parsed.headers['content-type']).toBeUndefined();
+		expect(parsed.rawHeaders?.['content-type']).toBeUndefined();
+		expect(parsed.html).toBeUndefined();
+		expect(parsed.text).toContain('<p>x</p>');
+	});
+
+	it('does not adopt a smuggled Content-Transfer-Encoding', async () => {
+		const parsed = await parseRaw('Subject: s\r\n Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=');
+		expect(parsed.rawHeaders?.['content-transfer-encoding']).toBeUndefined();
+		expect(parsed.text).toBe(' Content-Transfer-Encoding: base64\n\naGVsbG8=');
+		expect(new TextDecoder().decode(parsed[parsedBodyBytesSymbol]?.text)).toBe(' Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=');
+	});
+
+	it('keeps an mbox From line and an empty-name field inside the header block', async () => {
+		const parsed = await parseRaw('From sender@example.com Mon Jan  1 00:00:00 2024\r\nSubject: s\r\n: x\r\nContent-Type: text/html\r\n\r\n<p>x</p>');
+		expect(parsed.subject).toBe('s');
+		expect(parsed.rawHeaders?.['content-type']).toBe('text/html');
+		expect(parsed.html).toBe('<p>x</p>');
+		expect(parsed.text).toBeUndefined();
+	});
+
+	it('ends the header block at an escaped From line', async () => {
+		const parsed = await parseRaw('Subject: s\r\n&gt;From x\r\nContent-Type: text/html\r\n\r\n<p>x</p>');
+		expect(parsed.rawHeaders).toEqual({ subject: 's' });
+		expect(parsed.text).toBe('&gt;From x\nContent-Type: text/html\n\n<p>x</p>');
+	});
+
+	it('splits LF-only and CRLF/LF mixed input at the first empty line', async () => {
+		const lfOnly = await parseRaw('Subject: s\nContent-Type: text/plain\n\nbody\n\nmore');
+		expect(lfOnly.rawHeaders?.['content-type']).toBe('text/plain');
+		expect(new TextDecoder().decode(lfOnly[parsedBodyBytesSymbol]?.text)).toBe('body\n\nmore');
+
+		const crlfSeparator = await parseRaw('Subject: s\nX-A: y\r\n\r\nbody');
+		expect(crlfSeparator.rawHeaders).toEqual({ subject: 's', 'x-a': 'y' });
+		expect(new TextDecoder().decode(crlfSeparator[parsedBodyBytesSymbol]?.text)).toBe('body');
+
+		// 本文中の CRLFCRLF をヘッダー終端と誤認しないこと
+		const crlfInBody = await parseRaw('Subject: s\n\nbody line\r\n\r\nmore');
+		expect(crlfInBody.rawHeaders).toEqual({ subject: 's' });
+		expect(crlfInBody.text).toBe('body line\n\nmore');
+		expect(new TextDecoder().decode(crlfInBody[parsedBodyBytesSymbol]?.text)).toBe('body line\r\n\r\nmore');
+	});
+
+	// 既知のギャップ: パートヘッダーは従来どおり空行で分割するため、パートヘッダーに junk 行があると
+	// payload.text(postal-mime 4.1.4)と送信バイト(compat)が食い違い得る(Issue #47 のスコープ外)
+	it.todo('aligns part header splitting with postal-mime 4.1.4 when a part header contains a junk line');
 });
 
 describe('postal-mime adapter multipart compat details', () => {
