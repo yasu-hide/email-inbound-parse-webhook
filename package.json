@@ -20,7 +20,7 @@
 		"qdrant:refresh": "pnpm run qdrant:diff-targets && pnpm run qdrant:store-batch"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.18.8",
+		"@cloudflare/vitest-pool-workers": "^0.23.0",
 		"@types/node": "^25.3.2",
 		"@vitest/coverage-istanbul": "~4.1.12",
 		"tsx": "^4.23.15",
