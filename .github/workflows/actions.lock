@@ -6,7 +6,7 @@ workflows:
     '.github/workflows/deploy.yml':
         - 'actions/checkout@v4.4.0'
         - 'actions/setup-node@v4.4.0'
-        - 'pnpm/action-setup@v4.3.0'
+        - 'pnpm/action-setup@v6.1.0'
     '.github/workflows/gitleaks.yml':
         - 'actions/checkout@v4.4.0'
         - 'gitleaks/gitleaks-action@v2.3.9'
@@ -14,7 +14,7 @@ workflows:
         - 'actions/checkout@v4.4.0'
         - 'actions/setup-node@v4.4.0'
         - 'codecov/codecov-action@v5.5.5'
-        - 'pnpm/action-setup@v4.3.0'
+        - 'pnpm/action-setup@v6.1.0'
 dependencies:
     'actions/checkout@v4.4.0':
         ref: 'v4.4.0'
@@ -43,8 +43,8 @@ dependencies:
         commit: 'sha1-ff98106e4c7b2bc287b24eaf42907196329070c7'
         owner_id: 90395851
         repo_id: 242854909
-    'pnpm/action-setup@v4.3.0':
-        ref: 'v4.3.0'
-        commit: 'sha1-b906affcce14559ad1aafd4ab0e942779e9f58b1'
+    'pnpm/action-setup@v6.1.0':
+        ref: 'v6.1.0'
+        commit: 'sha1-ea17c68df8912ef543352723c149a84f56e3d413'
         owner_id: 21320719
         repo_id: 262289747
