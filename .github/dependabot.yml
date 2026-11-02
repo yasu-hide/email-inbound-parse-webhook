@@ -12,6 +12,13 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    # @cloudflare/vitest-pool-workers の peer 依存が vitest ^4 のため、
+    # vitest 5 に対応するまで vitest 系のメジャー更新は見送る。
+    ignore:
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/*"
+        update-types: ["version-update:semver-major"]
     groups:
       vitest:
         patterns:
